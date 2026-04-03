@@ -34,15 +34,43 @@ It finds `kicad-cli` automatically on any platform — no configuration needed.
 
 ## Installation
 
-### Requirements
+### Download pre-built binary (recommended)
 
-- **KiCad 10** installed ([kicad.org](https://www.kicad.org/download/))
+**macOS (Apple Silicon)**
+```bash
+curl -L https://github.com/berknylm/kicli/releases/latest/download/kicli-macos-arm64.tar.gz | tar -xz
+sudo mv kicli /usr/local/bin/
+```
+
+**macOS (Intel)**
+```bash
+curl -L https://github.com/berknylm/kicli/releases/latest/download/kicli-macos-x86_64.tar.gz | tar -xz
+sudo mv kicli /usr/local/bin/
+```
+
+**Linux**
+```bash
+curl -L https://github.com/berknylm/kicli/releases/latest/download/kicli-linux-x86_64.tar.gz | tar -xz
+sudo mv kicli /usr/local/bin/
+```
+
+**Windows** — download `kicli-windows-x86_64.zip` from the [latest release](https://github.com/berknylm/kicli/releases/latest), extract, and add the folder to your PATH.
+
+> Requires **KiCad 10** — [kicad.org/download](https://www.kicad.org/download/)
+
+---
+
+### Build from source
+
+#### Requirements
+
+- **KiCad 10** installed
 - **CMake 3.19+**
 - **A C11 compiler** (clang, gcc, or MSVC)
-- **libcurl** (pre-installed on macOS; `apt install libcurl4-openssl-dev` on Linux; bundled with Windows)
-- **Ninja** (optional but recommended: `brew install ninja` / `choco install ninja`)
+- **libcurl** (pre-installed on macOS; `apt install libcurl4-openssl-dev` on Linux)
+- **Ninja** (`brew install ninja` / `choco install ninja`)
 
-### macOS
+#### macOS / Linux
 
 ```bash
 git clone https://github.com/berknylm/kicli.git
