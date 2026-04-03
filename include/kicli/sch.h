@@ -23,6 +23,15 @@ sexpr_t    *sexpr_get(const sexpr_t *list, const char *key);    /* first child l
 sexpr_t   **sexpr_get_all(const sexpr_t *list, const char *key, size_t *count_out);
 const char *sexpr_atom_value(const sexpr_t *list, const char *key); /* first atom of named child */
 
+/* ── S-expression builders ───────────────────────────────────────────────── */
+sexpr_t *sexpr_make_atom(const char *val);          /* bare atom   */
+sexpr_t *sexpr_make_str(const char *val);           /* "quoted"    */
+sexpr_t *sexpr_make_list(void);                     /* empty list  */
+int      sexpr_list_append(sexpr_t *list, sexpr_t *child); /* 1=ok */
+
+/* ── S-expression serializer ─────────────────────────────────────────────── */
+int sexpr_write_file(const sexpr_t *root, const char *path); /* 0=ok */
+
 /* ── Geometry ────────────────────────────────────────────────────────────── */
 
 typedef struct { double x, y, angle; } kicli_pos_t;
