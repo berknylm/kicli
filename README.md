@@ -1,22 +1,4 @@
-<p align="center">
-  <img src="assets/kicli-logo.svg" alt="kicli" width="120" />
-</p>
-
-<h1 align="center">kicli</h1>
-
-<p align="center">
-  <strong>Agent-friendly KiCad CLI — create projects, list components, fetch parts, check stock.</strong>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/KiCad-10-brightgreen" alt="KiCad 10" />
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" />
-  <img src="https://img.shields.io/badge/license-MIT-blue" />
-</p>
-
----
-
-## What is kicli?
+## kicli
 
 `kicli` is a thin, pipe-friendly CLI wrapper around KiCad 10. It is designed for use by AI agents and automation scripts:
 
