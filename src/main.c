@@ -63,6 +63,7 @@ static void print_usage(void) {
     printf("  " CLR_CYAN "sch <file> info <ref>" CLR_RESET "       Show component details\n");
     printf("  " CLR_CYAN "sch <file> nets" CLR_RESET "             List all nets\n");
     printf("  " CLR_CYAN "sch <file> stats" CLR_RESET "            Count summary\n");
+    printf("  " CLR_CYAN "sch <file> dump [-o out.kisch]" CLR_RESET "  Full pin+net table (.kisch format)\n");
     printf("  " CLR_CYAN "sch <file> export <fmt>" CLR_RESET "     Export via kicad-cli (pdf/svg/netlist/bom)\n");
     printf("  " CLR_CYAN "sch <file> erc" CLR_RESET "              Electrical rules check\n");
     printf("\n" CLR_BOLD "Components (coming soon):\n" CLR_RESET);
