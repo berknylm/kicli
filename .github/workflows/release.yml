@@ -10,15 +10,16 @@ jobs:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false          # don't cancel other platforms if one fails
       matrix:
         include:
           - name: macOS-arm64
-            os: macos-14          # Apple Silicon runner
+            os: macos-14
             cmake_args: -DCMAKE_OSX_ARCHITECTURES=arm64
             artifact: kicli-macos-arm64
 
           - name: macOS-x86_64
-            os: macos-13          # Intel runner
+            os: macos-13
             cmake_args: -DCMAKE_OSX_ARCHITECTURES=x86_64
             artifact: kicli-macos-x86_64
 
@@ -41,19 +42,18 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev
+          sudo apt-get install -y ninja-build libcurl4-openssl-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install cmake ninja
+        run: brew install ninja
+        # cmake and curl are pre-installed on macOS runners
 
-      - name: Install dependencies (Windows)
+      - name: Install curl static (Windows)
         if: runner.os == 'Windows'
-        run: |
-          choco install cmake ninja -y
-          # Install curl via vcpkg
-          vcpkg install curl:x64-windows
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+        # vcpkg is pre-installed on windows-latest at VCPKG_INSTALLATION_ROOT
+        # Use static triplet so the binary has no DLL dependency
+        run: vcpkg install curl:x64-windows-static --triplet x64-windows-static
 
       # ── Configure ─────────────────────────────────────────────────────────
 
@@ -67,11 +67,13 @@ jobs:
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
+        # Use VCPKG_INSTALLATION_ROOT directly — no need to re-export it
         run: |
           cmake -B build/release `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DCURL_STATIC_LIBS=ON
 
       # ── Build ─────────────────────────────────────────────────────────────
 
@@ -90,18 +92,19 @@ jobs:
         run: |
           mkdir -p dist
           cp build/release/bin/kicli dist/kicli
-          cd dist
-          tar -czf ../${{ matrix.artifact }}.tar.gz kicli
-          echo "Built $(./kicli --version)"
+          tar -czf ${{ matrix.artifact }}.tar.gz -C dist kicli
+          echo "Packaged: $(dist/kicli --version)"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           New-Item -ItemType Directory -Force -Path dist
-          Copy-Item build/release/bin/Release/kicli.exe dist/kicli.exe
+          # MSVC puts the binary in bin/Release/ with multi-config generators
+          $bin = Get-ChildItem -Path build/release -Recurse -Filter kicli.exe | Select-Object -First 1
+          Copy-Item $bin.FullName dist/kicli.exe
           Compress-Archive -Path dist/kicli.exe -DestinationPath ${{ matrix.artifact }}.zip
 
-      # ── Upload artifact ───────────────────────────────────────────────────
+      # ── Upload ────────────────────────────────────────────────────────────
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'
@@ -123,6 +126,7 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    if: always()   # run even if some platform builds failed
     permissions:
       contents: write
 
@@ -159,11 +163,12 @@ jobs:
             sudo mv kicli /usr/local/bin/
             ```
 
-            **Windows** — download `kicli-windows-x86_64.zip`, extract and add to PATH.
+            **Windows** — download `kicli-windows-x86_64.zip`, extract `kicli.exe` and add the folder to your PATH.
 
             ---
-            Requires KiCad 10 — [kicad.org/download](https://www.kicad.org/download/)
+            Requires **KiCad 10** — [kicad.org/download](https://www.kicad.org/download/)
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
           generate_release_notes: true
+          fail_on_unmatched_files: false
