@@ -332,9 +332,3 @@ cd kicli
 cargo build
 cargo test
 ```
-
----
-
-## License
-
-MIT © [Your Name](https://github.com/yourusername)

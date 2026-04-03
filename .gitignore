@@ -1,0 +1,22 @@
+# Rust
+/target/
+Cargo.lock
+
+# Examples (reference repos)
+examples/
+
+# macOS
+.DS_Store
+
+# Config / secrets
+.env
+*.env.local
+
+# KiCad local files
+*.kicad_prl
+fp-info-cache
+
+# Editor
+.idea/
+.vscode/
+*.swp
