@@ -1,169 +1,236 @@
-# kicli Implementation Plan
+# kicli — Implementation Plan
 
-## Overview
+## What is kicli?
 
-kicli is a Rust CLI toolkit for KiCad with three core subcommand groups:
-- `kicli fetch` — component library manager (download symbols, footprints, 3D models)
-- `kicli stock` — real-time supplier stock/pricing checker
-- `kicli sch` — schematic parser, manipulator, and exporter
+An agent-friendly CLI layer for KiCad 10. It does two things:
 
----
+1. **Wraps `kicad-cli`** — makes KiCad's own CLI usable from scripts and AI agents
+2. **Adds what kicad-cli can't do** — create projects, fetch components, check stock
 
-## Phase 0: Project Scaffold
+Designed for pipe-friendly, grep-able output:
+```bash
+kicli sch board.kicad_sch list | grep "^U"       # all ICs
+kicli sch board.kicad_sch list | grep TPS        # find TPS parts
+kicli stock C2040 C14663                          # check stock
+```
 
-**Goal:** Compiling binary with CLI skeleton and config loading.
+## Distribution goal
 
-- [ ] Initialize `Cargo.toml` with dependencies: `clap`, `serde`/`serde_json`/`toml`, `anyhow`/`thiserror`, `tokio`, `reqwest`
-- [ ] `src/main.rs` — top-level `clap` command with `fetch`, `stock`, `sch` subcommands
-- [ ] `src/error.rs` — shared error types via `thiserror`
-- [ ] `src/config.rs` — load `.kicli.toml` (project) then `~/.config/kicli/config.toml` (global), merge and expose typed config struct
-- [ ] `src/lib.rs` — re-export public API
-- [ ] Verify `cargo build` succeeds and `kicli --help` shows three subcommand groups
+User runs one of:
+```bash
+# macOS
+brew install kicli
 
----
+# macOS / Linux (manual)
+curl -fsSL https://github.com/you/kicli/releases/latest/download/install.sh | sh
 
-## Phase 1: `kicli fetch`
+# Windows (PowerShell)
+irm https://github.com/you/kicli/releases/latest/download/install.ps1 | iex
 
-**Goal:** Import LCSC components (symbols + footprints + 3D models) into local KiCad libraries.
+# From source
+git clone https://github.com/you/kicli && cd kicli
+cmake --preset release && cmake --install build/release
+```
 
-### 1.1 Source abstraction
-- [ ] `src/fetch/sources/mod.rs` — define `ComponentSource` trait: `search`, `info`, `download`
-- [ ] `src/fetch/sources/lcsc.rs` — implement LCSC via EasyEDA/LCSC API; parse response into `ComponentAssets` (symbol KiCad `.kicad_sym`, footprint `.kicad_mod`, 3D `.step`/`.wrl`)
+## Tech stack
 
-### 1.2 Importer
-- [ ] `src/fetch/importer.rs` — write downloaded assets into `lib_dir/{symbol_lib}.kicad_sym` and `{footprint_lib}.pretty/`, merge without duplicating existing entries
-
-### 1.3 Registry
-- [ ] `src/fetch/registry.rs` — persist fetched component metadata to `.kicli/registry.json` (id, source, version, timestamp)
-
-### 1.4 Subcommand wiring
-- [ ] `src/fetch/mod.rs` — route `fetch <ID>`, `fetch search`, `fetch info`, `fetch list`, `fetch sync`, `fetch remove`, `fetch sources`
-- [ ] Support `--source`, `--lib`, `--from <csv>` flags
-- [ ] Implement `fetch sync --dry-run`
-
-### 1.5 Additional sources (after LCSC works)
-- [ ] `src/fetch/sources/digikey.rs`
-- [ ] `src/fetch/sources/snapeda.rs`
+- **Language:** C11
+- **Build:** CMake 3.19+, Ninja
+- **HTTP:** libcurl (system)
+- **JSON:** cJSON (vendored)
+- **ZIP:** kuba--/zip (vendored)
+- **Config:** tomlc99 (vendored)
+- **Args:** optparse (vendored)
+- **Platforms:** macOS (arm64 + x86_64), Windows (x64), Linux (x64)
 
 ---
 
-## Phase 2: `kicli stock`
+## Milestones
 
-**Goal:** Query real-time stock and pricing from multiple suppliers.
-
-### 2.1 Supplier abstraction
-- [ ] `src/stock/suppliers/mod.rs` — define `Supplier` trait: `check_stock(part_numbers) -> Vec<StockResult>`
-- [ ] `src/stock/suppliers/lcsc.rs` — LCSC stock API
-- [ ] `src/stock/suppliers/digikey.rs` — Digikey product search API (OAuth2)
-- [ ] `src/stock/suppliers/mouser.rs` — Mouser search API (API key)
-
-### 2.2 Core logic
-- [ ] `src/stock/checker.rs` — fan-out requests across configured suppliers concurrently (`tokio::join!`), aggregate into `StockReport`
-- [ ] `src/stock/bom.rs` — parse CSV BOM, extract part numbers column, yield list for batch checking
-
-### 2.3 Watch & alerts
-- [ ] `src/stock/watcher.rs` — poll on interval, diff against last snapshot, fire alert when threshold crossed
-- [ ] Alert channels: terminal (default), webhook (Slack-compatible)
-
-### 2.4 Output formatting
-- [ ] Table output for `stock check` / `stock compare` (use `comfy-table` or `tabled`)
-- [ ] `stock export` — write enriched CSV or XLSX with pricing columns
-
-### 2.5 Subcommand wiring
-- [ ] `src/stock/mod.rs` — route `check`, `bom`, `watch`, `compare`, `export`
-- [ ] Cache results to `~/.cache/kicli/stock/` with TTL from config (`cache_ttl`)
+### ✅ M0 — Project scaffold
+- [x] CMake build system
+- [x] Vendor libraries (cJSON, zip, tomlc99, optparse, tinycthread)
+- [x] src/error.c — error handling
+- [x] src/config.c — .kicli.toml loading
 
 ---
 
-## Phase 3: `kicli sch`
+### 🔲 M1 — kicad-cli discovery (current focus)
 
-**Goal:** Full read/write access to `.kicad_sch` files from the CLI.
+**Goal:** `kicli` can find `kicad-cli` on any platform and run it.
 
-### 3.1 Parser
-- [ ] `src/sch/parser.rs` — parse KiCad s-expression (sexpr) format into `Schematic` model
-  - Use `kicad_sexpr` crate if available, otherwise hand-roll a minimal s-expr tokenizer
+Files:
+```
+include/kicli/kicad_cli.h
+src/kicad/kicad_cli.c
+```
 
-### 3.2 Data model
-- [ ] `src/sch/model.rs` — types: `Schematic`, `Symbol`, `Wire`, `Junction`, `Label`, `Pin`, `Property`
-
-### 3.3 Writer
-- [ ] `src/sch/writer.rs` — serialize `Schematic` back to valid `.kicad_sch` s-expression; create `.bak` when `backup_on_write = true`
-
-### 3.4 Operations
-- [ ] `src/sch/ops.rs`
-  - `add_symbol` — place symbol instance at coordinates, assign reference/value
-  - `remove_symbol` — delete by reference
-  - `move_symbol` — update `at` field
-  - `connect` — add wire segment between pin positions
-  - `disconnect` — remove wire
-  - `rename` — update reference across symbol and labels
-  - `set_field` — update arbitrary property value
-
-### 3.5 Diff
-- [ ] `src/sch/diff.rs` — compare two `Schematic` instances, produce added/modified/removed lists
-
-### 3.6 Validate
-- [ ] `src/sch/validate.rs` — basic ERC: detect unconnected pins, duplicate references, missing power symbols
-
-### 3.7 Export
-- [ ] `src/sch/export.rs` — invoke KiCad CLI (`kicad-cli`) for PDF/SVG/PNG/netlist export; fall back to error if `kicad-cli` not on PATH
-
-### 3.8 Subcommand wiring
-- [ ] `src/sch/mod.rs` — route all subcommands; `dump` serializes via `serde_json`/`serde_yaml`; `tree` renders ASCII hierarchy; `read` shows abbreviated tree
+Features:
+- [ ] Find kicad-cli: check `$KICAD_CLI_PATH` env → platform default paths → `$PATH`
+- [ ] Platform default paths:
+  - macOS: `/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli`
+  - Windows: `C:\Program Files\KiCad\bin\kicad-cli.exe`
+  - Linux: `/usr/bin/kicad-cli`, `/usr/local/bin/kicad-cli`
+- [ ] `kicli kicad-path` — print where kicad-cli was found (or error)
+- [ ] `kicli kicad-version` — print KiCad version
 
 ---
 
-## Phase 4: Testing
+### 🔲 M2 — Project creation
 
-- [ ] `tests/fixtures/sample.kicad_sch` — minimal valid schematic fixture
-- [ ] `tests/fixtures/sample_bom.csv` — sample BOM with LCSC part numbers
-- [ ] `tests/sch_tests.rs` — round-trip parse → write → parse, op tests
-- [ ] `tests/stock_tests.rs` — mock HTTP responses, verify aggregation logic
-- [ ] `tests/fetch_tests.rs` — mock API, verify file output in temp dir
+**Goal:** `kicli new myboard` creates a complete, openable KiCad 10 project.
+
+Files:
+```
+include/kicli/project.h
+src/project/project.c
+```
+
+Features:
+- [ ] `kicli new <name> [path]`
+- Creates:
+  ```
+  <name>/
+    <name>.kicad_pro      ← KiCad 10 project JSON
+    <name>.kicad_sch      ← blank schematic
+    sym-lib-table         ← wired to libs/symbols/ via ${KIPRJMOD}
+    fp-lib-table          ← wired to libs/footprints/ via ${KIPRJMOD}
+    libs/symbols/
+    libs/footprints/
+    libs/3dmodels/
+    .kicli.toml           ← project config
+  ```
 
 ---
 
-## Phase 5: Polish
+### 🔲 M3 — Schematic read (own parser)
 
-- [ ] Progress bars / spinners via `indicatif` for slow network operations
-- [ ] `--json` global flag for machine-readable output on any command
-- [ ] Shell completion generation (`clap_complete`)
-- [ ] Man page generation (`clap_mangen`)
-- [ ] Interactive TUI mode (`ratatui`) — stretch goal
+**Goal:** `kicli sch FILE list` — grep-able component list.
 
----
+Files:
+```
+src/sch/sexpr.c     ← ✅ done (287 lines)
+src/sch/model.c     ← parse sexpr into data model
+src/sch/sch.c       ← CLI dispatcher
+```
 
-## Dependency Plan
+Commands (file is always second argument):
+```bash
+kicli sch <file> list                    # one component per line: REF VALUE LIB_ID
+kicli sch <file> info <REF>              # detailed component info
+kicli sch <file> nets                    # list all nets and connected pins
+kicli sch <file> tree                    # hierarchy tree
+kicli sch <file> stats                   # component count summary
+```
 
-```toml
-[dependencies]
-clap          = { version = "4", features = ["derive"] }
-serde         = { version = "1", features = ["derive"] }
-serde_json    = "1"
-serde_yaml    = "0.9"
-toml          = "0.8"
-anyhow        = "1"
-thiserror     = "1"
-tokio         = { version = "1", features = ["full"] }
-reqwest       = { version = "0.12", features = ["json"] }
-comfy-table   = "7"
-indicatif     = "0.17"
-dirs          = "5"
-chrono        = "0.4"
+Output format (grep-friendly):
+```
+R1  10k        Device:R           Resistor_SMD:R_0402
+C1  100nF      Device:C           Capacitor_SMD:C_0402
+U1  STM32F405  MCU_ST:STM32F405   Package_LQFP:LQFP-64
 ```
 
 ---
 
-## Milestone Summary
+### 🔲 M4 — kicad-cli passthrough
 
-| Phase | Deliverable                        | Priority  |
-|-------|------------------------------------|-----------|
-| 0     | Compiling scaffold + config        | Critical  |
-| 1     | `kicli fetch` with LCSC            | High      |
-| 2     | `kicli stock` check + BOM          | High      |
-| 3     | `kicli sch` read/dump/validate     | High      |
-| 3+    | sch add/remove/connect/diff        | Medium    |
-| 1+    | Digikey, SnapEDA sources           | Medium    |
-| 2+    | Stock watch + export               | Medium    |
-| 4     | Tests                              | High      |
-| 5     | TUI, completions, man pages        | Low       |
+**Goal:** `kicli sch FILE export pdf` → delegates to `kicad-cli`.
+
+```bash
+kicli sch <file> export pdf [--output out.pdf]
+kicli sch <file> export svg [--output out.svg]
+kicli sch <file> export netlist [--output net.xml]
+kicli sch <file> export bom [--output bom.csv]
+kicli sch <file> erc [--output report.txt]
+kicli sch <file> upgrade
+```
+
+---
+
+### 🔲 M5 — Schematic write
+
+**Goal:** Agents can modify schematics from the CLI.
+
+Files: `src/sch/writer.c`, `src/sch/ops.c`
+
+```bash
+kicli sch <file> set <REF> <FIELD> <VALUE>   # e.g. set R1 value 4.7k
+kicli sch <file> add <LIB:SYM> --ref R5 --value 10k
+kicli sch <file> remove <REF>
+kicli sch <file> move <REF> <X> <Y>
+kicli sch <file> rename <OLD> <NEW>
+kicli sch <file> connect <PIN_A> <PIN_B>
+```
+
+---
+
+### 🔲 M6 — Component fetch
+
+**Goal:** `kicli fetch C2040` downloads and installs a component into the project.
+
+Files: `src/fetch/` (partially implemented)
+
+```bash
+kicli fetch <LCSC_ID>                    # fetch by LCSC part number
+kicli fetch search "USB Type-C"          # search components
+kicli fetch info C2040                   # show component details
+kicli fetch list                         # list fetched components
+kicli fetch remove C2040                 # remove component
+```
+
+---
+
+### 🔲 M7 — Stock check
+
+**Goal:** `kicli stock C2040` shows real-time availability.
+
+```bash
+kicli stock <PART> [PART...]             # check stock
+kicli stock bom <bom.csv>               # check all BOM parts
+kicli stock compare <PART>              # compare across suppliers
+```
+
+---
+
+### 🔲 M8 — Distribution
+
+**Goal:** Single binary, no runtime deps, installable on any machine.
+
+- [ ] GitHub Actions: build matrix (macOS arm64, macOS x86_64, Windows x64, Linux x64)
+- [ ] Static linking (no .dll/.dylib dependencies)
+- [ ] `install.sh` for macOS/Linux
+- [ ] `install.ps1` for Windows
+- [ ] Homebrew formula
+- [ ] GitHub Releases with pre-built binaries
+
+---
+
+## Command reference (final)
+
+```
+kicli new <name>                          Create a new KiCad 10 project
+kicli kicad-path                          Show path to kicad-cli
+kicli kicad-version                       Show KiCad version
+
+kicli sch <file> list                     List all components
+kicli sch <file> info <ref>               Component details
+kicli sch <file> nets                     List all nets
+kicli sch <file> tree                     Schematic hierarchy
+kicli sch <file> stats                    Count summary
+kicli sch <file> export <format>          Export (pdf/svg/netlist/bom)
+kicli sch <file> erc                      Electrical rules check
+kicli sch <file> upgrade                  Upgrade to latest format
+kicli sch <file> set <ref> <field> <val>  Edit a field
+kicli sch <file> add <lib:sym>            Add a component
+kicli sch <file> remove <ref>             Remove a component
+kicli sch <file> connect <a> <b>          Wire two pins
+kicli sch <file> diff <file2>             Diff two schematics
+
+kicli fetch <id>                          Fetch component from LCSC
+kicli fetch search <query>               Search components
+kicli fetch list                          List fetched components
+
+kicli stock <part...>                     Check stock & price
+kicli stock bom <file>                    Check BOM stock
+kicli stock compare <part>               Compare suppliers
+```

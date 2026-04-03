@@ -26,6 +26,10 @@ target_include_directories(cjson PUBLIC vendor/cjson)
 add_library(ziplib STATIC vendor/miniz/zip.c)
 target_include_directories(ziplib PUBLIC vendor/miniz)
 target_compile_definitions(ziplib PUBLIC ZIP_STATIC)
+# Enable symlink/ftruncate via unistd.h on POSIX platforms
+if(NOT WIN32)
+    target_compile_definitions(ziplib PRIVATE ZIP_HAVE_SYMLINK=1)
+endif()
 
 # ── Vendor library: tomlc99 ─────────────────────────────────────────────────
 add_library(tomlc99 STATIC vendor/tomlc99/toml.c)
