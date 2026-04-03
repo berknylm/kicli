@@ -47,6 +47,8 @@ endif()
 # ── kicli sources ───────────────────────────────────────────────────────────
 file(GLOB_RECURSE KICLI_SOURCES
     src/*.c
+    src/kicad/*.c
+    src/project/*.c
     src/fetch/*.c
     src/fetch/sources/*.c
     src/stock/*.c

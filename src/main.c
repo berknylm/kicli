@@ -1,32 +1,31 @@
 /*
- * kicli — KiCad CLI toolkit
- * Entry point and top-level argument dispatch.
+ * kicli — agent-friendly KiCad CLI wrapper
  *
  * Build:
  *   cmake --preset debug && cmake --build build/debug
  *
  * Usage:
- *   kicli fetch <ID> [--source lcsc] [--lib mylib]
- *   kicli stock check <PART> ...
- *   kicli sch read <FILE>
- *   kicli --help
+ *   kicli new <name>                    Create a KiCad 10 project
+ *   kicli kicad-path                    Show where kicad-cli is installed
+ *   kicli kicad-version                 Show KiCad version
+ *   kicli sch <file> list               List components (grep-friendly)
+ *   kicli sch <file> export pdf         Delegate to kicad-cli
+ *   kicli fetch <LCSC_ID>               Fetch a component
+ *   kicli stock <PART>                  Check stock
  */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-/* optparse: portable getopt replacement (header-only, no getopt.h needed) */
 #define OPTPARSE_IMPLEMENTATION
 #define OPTPARSE_API static
 #include "optparse.h"
 
 #include "kicli/config.h"
 #include "kicli/error.h"
-#include "kicli/fetch.h"
-#include "kicli/stock.h"
-#include "kicli/sch.h"
+#include "kicli/kicad_cli.h"
 
-/* ── Colour helpers (enable VT on Windows 10+) ─────────────────────────── */
+/* ── VT color support on Windows 10+ ───────────────────────────────────── */
 #ifdef _WIN32
 #  include <windows.h>
 static void enable_vt_colors(void) {
@@ -42,24 +41,37 @@ static void enable_vt_colors(void) {}
 #define CLR_RESET  "\x1b[0m"
 #define CLR_BOLD   "\x1b[1m"
 #define CLR_RED    "\x1b[31m"
-#define CLR_GREEN  "\x1b[32m"
-#define CLR_YELLOW "\x1b[33m"
 #define CLR_CYAN   "\x1b[36m"
 
 /* ── Usage ──────────────────────────────────────────────────────────────── */
 
 static void print_usage(void) {
-    printf(CLR_BOLD "kicli" CLR_RESET " — KiCad CLI toolkit\n\n");
-    printf("Usage: kicli <command> [subcommand] [options]\n\n");
-    printf(CLR_BOLD "Commands:\n" CLR_RESET);
-    printf("  " CLR_CYAN "fetch" CLR_RESET "   Fetch component symbols, footprints and 3D models\n");
-    printf("  " CLR_CYAN "stock" CLR_RESET "   Check component stock levels and pricing\n");
-    printf("  " CLR_CYAN "sch"   CLR_RESET "     Read and manipulate KiCad schematic files\n");
-    printf("\nRun 'kicli <command> --help' for command-specific help.\n");
+    printf(CLR_BOLD "kicli" CLR_RESET " — agent-friendly KiCad CLI wrapper\n\n");
+    printf("Usage: kicli <command> [args]\n\n");
+    printf(CLR_BOLD "Project:\n" CLR_RESET);
+    printf("  " CLR_CYAN "new" CLR_RESET " <name>              Create a new KiCad 10 project\n");
+    printf("\n" CLR_BOLD "KiCad:\n" CLR_RESET);
+    printf("  " CLR_CYAN "kicad-path" CLR_RESET "              Show path to kicad-cli\n");
+    printf("  " CLR_CYAN "kicad-version" CLR_RESET "           Show installed KiCad version\n");
+    printf("\n" CLR_BOLD "Schematic:\n" CLR_RESET);
+    printf("  " CLR_CYAN "sch" CLR_RESET " <file> list         List all components\n");
+    printf("  " CLR_CYAN "sch" CLR_RESET " <file> info <ref>   Show component details\n");
+    printf("  " CLR_CYAN "sch" CLR_RESET " <file> nets         List all nets\n");
+    printf("  " CLR_CYAN "sch" CLR_RESET " <file> export <fmt> Export (pdf/svg/netlist/bom)\n");
+    printf("  " CLR_CYAN "sch" CLR_RESET " <file> erc          Run electrical rules check\n");
+    printf("  " CLR_CYAN "sch" CLR_RESET " <file> set <r> <f> <v>  Edit a field\n");
+    printf("\n" CLR_BOLD "Components:\n" CLR_RESET);
+    printf("  " CLR_CYAN "fetch" CLR_RESET " <LCSC_ID>         Fetch component from LCSC\n");
+    printf("  " CLR_CYAN "fetch" CLR_RESET " search <query>    Search components\n");
+    printf("\n" CLR_BOLD "Stock:\n" CLR_RESET);
+    printf("  " CLR_CYAN "stock" CLR_RESET " <part> [part...]  Check stock and pricing\n");
+    printf("  " CLR_CYAN "stock" CLR_RESET " bom <file>        Check all BOM parts\n");
+    printf("\nRun 'kicli <command> --help' for detailed usage.\n");
 }
 
-/* ── Sub-dispatchers (implemented in their own files) ───────────────────── */
+/* ── Forward declarations ───────────────────────────────────────────────── */
 
+int cmd_new  (int argc, char **argv);
 int cmd_fetch(int argc, char **argv, const kicli_config_t *cfg);
 int cmd_stock(int argc, char **argv, const kicli_config_t *cfg);
 int cmd_sch  (int argc, char **argv, const kicli_config_t *cfg);
@@ -74,27 +86,52 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    /* Global --version / --help before config load */
-    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0) {
+    const char *cmd = argv[1];
+
+    if (strcmp(cmd, "--version") == 0 || strcmp(cmd, "-V") == 0) {
         printf("kicli 0.1.0\n");
         return 0;
     }
-    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+    if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
         print_usage();
         return 0;
     }
 
-    /* Load config (tolerates missing files) */
+    /* kicad-path and kicad-version don't need config */
+    if (strcmp(cmd, "kicad-path") == 0) {
+        char path[KICAD_CLI_MAX_PATH];
+        if (kicad_cli_find(path) != KICLI_OK) {
+            fprintf(stderr, CLR_RED "error:" CLR_RESET " %s\n", kicli_last_error());
+            return 1;
+        }
+        printf("%s\n", path);
+        return 0;
+    }
+
+    if (strcmp(cmd, "kicad-version") == 0) {
+        char ver[32];
+        if (kicad_cli_version(ver) != KICLI_OK) {
+            fprintf(stderr, CLR_RED "error:" CLR_RESET " %s\n", kicli_last_error());
+            return 1;
+        }
+        printf("%s\n", ver);
+        return 0;
+    }
+
+    /* new doesn't need config either */
+    if (strcmp(cmd, "new") == 0) {
+        return cmd_new(argc - 1, argv + 1);
+    }
+
+    /* Load config (tolerates missing files — uses defaults) */
     kicli_config_t cfg;
     kicli_config_load(&cfg);
-
-    const char *cmd = argv[1];
 
     if (strcmp(cmd, "fetch") == 0) return cmd_fetch(argc - 1, argv + 1, &cfg);
     if (strcmp(cmd, "stock") == 0) return cmd_stock(argc - 1, argv + 1, &cfg);
     if (strcmp(cmd, "sch")   == 0) return cmd_sch  (argc - 1, argv + 1, &cfg);
 
     fprintf(stderr, CLR_RED "error:" CLR_RESET " unknown command '%s'\n", cmd);
-    print_usage();
+    fprintf(stderr, "Run 'kicli --help' for usage.\n");
     return 1;
 }
