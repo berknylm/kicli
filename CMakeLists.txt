@@ -54,6 +54,8 @@ file(GLOB_RECURSE KICLI_SOURCES
     src/stock/*.c
     src/stock/suppliers/*.c
     src/sch/*.c
+    src/sch/parser/*.c
+    src/sch/ops/*.c
 )
 
 add_executable(kicli ${KICLI_SOURCES})

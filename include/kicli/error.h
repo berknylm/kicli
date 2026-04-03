@@ -13,6 +13,7 @@ typedef enum {
     KICLI_ERR_UNSUPPORTED,
     KICLI_ERR_OOM,
     KICLI_ERR_SUBPROCESS,
+    KICLI_ERR_NOT_IMPLEMENTED,
 } kicli_err_t;
 
 /* Thread-local last error message (max 512 chars) */
