@@ -1,21 +1,14 @@
-/* stock.c — stub dispatcher */
+/* stock.c — stub (M7: not yet implemented) */
 #include <stdio.h>
 #include <string.h>
 #include "kicli/stock.h"
-#define OPTPARSE_IMPLEMENTATION
-#define OPTPARSE_API static
-#include "optparse.h"
 
-int cmd_stock(int argc, char **argv, const kicli_config_t *cfg) {
-    (void)cfg;
+int cmd_stock(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0) {
-        printf("Usage: kicli stock check <PART...>\n");
-        printf("       kicli stock bom <BOM_FILE>\n");
-        printf("       kicli stock watch <PART...> [--below N]\n");
-        printf("       kicli stock compare <PART>\n");
-        printf("       kicli stock export <BOM_FILE>\n");
+        printf("Usage: kicli stock <PART> [PART...]   Check stock and pricing\n");
+        printf("       kicli stock bom <BOM_FILE>      Check all BOM parts\n");
         return 0;
     }
-    printf("\x1b[33mnot yet implemented: stock\x1b[0m\n");
-    return 0;
+    fprintf(stderr, "stock: not yet implemented (coming in M7)\n");
+    return 1;
 }

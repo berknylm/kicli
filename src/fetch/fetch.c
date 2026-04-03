@@ -1,23 +1,15 @@
-/* fetch.c — stub dispatcher */
+/* fetch.c — stub (M6: not yet implemented) */
 #include <stdio.h>
 #include <string.h>
 #include "kicli/fetch.h"
-#define OPTPARSE_IMPLEMENTATION
-#define OPTPARSE_API static
-#include "optparse.h"
 
-int cmd_fetch(int argc, char **argv, const kicli_config_t *cfg) {
-    (void)cfg;
+int cmd_fetch(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0) {
-        printf("Usage: kicli fetch <ID> [--source lcsc] [--lib name]\n");
-        printf("       kicli fetch search <QUERY>\n");
-        printf("       kicli fetch info <ID>\n");
-        printf("       kicli fetch sync [--dry-run]\n");
-        printf("       kicli fetch list\n");
-        printf("       kicli fetch remove <ID>\n");
-        printf("       kicli fetch sources\n");
+        printf("Usage: kicli fetch <LCSC_ID>      Fetch component from LCSC\n");
+        printf("       kicli fetch search <query>  Search components\n");
+        printf("       kicli fetch list             List fetched components\n");
         return 0;
     }
-    printf("\x1b[33mnot yet implemented: fetch\x1b[0m\n");
-    return 0;
+    fprintf(stderr, "fetch: not yet implemented (coming in M6)\n");
+    return 1;
 }

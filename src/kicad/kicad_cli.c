@@ -1,21 +1,33 @@
+/*
+ * kicad_cli.c — kicad-cli discovery, execution, capture
+ *
+ * Discovery priority:
+ *   1. $KICAD_CLI_PATH env var
+ *   2. Saved path in ~/.config/kicli/config
+ *   3. Platform default install paths
+ *   4. $PATH search
+ *
+ * After first successful auto-discovery the path is saved to config
+ * so future runs skip the search entirely.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 
 #ifdef _WIN32
 #  include <windows.h>
 #  include <io.h>
 #  define popen  _popen
 #  define pclose _pclose
-#  define F_OK 0
+#  define F_OK   0
 #  define access _access
 #else
 #  include <unistd.h>
-#  include <sys/wait.h>
 #endif
 
 #include "kicli/kicad_cli.h"
+#include "kicli/config.h"
 #include "kicli/error.h"
 
 /* ── Platform default paths ─────────────────────────────────────────────── */
@@ -23,34 +35,27 @@
 static const char *default_paths[] = {
 #if defined(__APPLE__)
     "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
-    /* Homebrew cask installs to same location */
 #elif defined(_WIN32)
     "C:\\Program Files\\KiCad\\10.0\\bin\\kicad-cli.exe",
     "C:\\Program Files\\KiCad\\bin\\kicad-cli.exe",
     "C:\\Program Files (x86)\\KiCad\\10.0\\bin\\kicad-cli.exe",
-    "C:\\Program Files (x86)\\KiCad\\bin\\kicad-cli.exe",
-    /* Scoop installs */
-    /* Users can override with KICAD_CLI_PATH */
 #else
-    /* Linux */
     "/usr/bin/kicad-cli",
     "/usr/local/bin/kicad-cli",
     "/snap/kicad/current/usr/bin/kicad-cli",
-    "/opt/kicad/bin/kicad-cli",
 #endif
     NULL
 };
 
 /* ── PATH search ─────────────────────────────────────────────────────────── */
 
-static bool find_in_path(char *out) {
+static int find_in_path(char *out)
+{
     const char *path_env = getenv("PATH");
-    if (!path_env) return false;
+    if (!path_env) return 0;
 
-    /* Work on a copy */
     char path_copy[4096];
-    strncpy(path_copy, path_env, sizeof(path_copy) - 1);
-    path_copy[sizeof(path_copy) - 1] = '\0';
+    snprintf(path_copy, sizeof(path_copy), "%s", path_env);
 
 #ifdef _WIN32
     const char sep = ';';
@@ -61,112 +66,130 @@ static bool find_in_path(char *out) {
 #endif
 
     char *dir = path_copy;
-    char *next;
     while (dir && *dir) {
-        next = strchr(dir, sep);
+        char *next = strchr(dir, sep);
         if (next) *next = '\0';
 
         char candidate[KICAD_CLI_MAX_PATH];
         snprintf(candidate, sizeof(candidate), "%s/%s", dir, exe);
-
         if (access(candidate, F_OK) == 0) {
-            strncpy(out, candidate, KICAD_CLI_MAX_PATH - 1);
-            out[KICAD_CLI_MAX_PATH - 1] = '\0';
-            return true;
+            snprintf(out, KICAD_CLI_MAX_PATH, "%s", candidate);
+            return 1;
         }
-
         dir = next ? next + 1 : NULL;
     }
-    return false;
+    return 0;
 }
 
 /* ── Cached path ─────────────────────────────────────────────────────────── */
 
-static char _cached_path[KICAD_CLI_MAX_PATH] = {0};
+static char s_path[KICAD_CLI_MAX_PATH] = {0};
 
-kicli_err_t kicad_cli_find(char *out) {
-    /* Return cached result */
-    if (_cached_path[0] != '\0') {
-        strncpy(out, _cached_path, KICAD_CLI_MAX_PATH - 1);
+kicli_err_t kicad_cli_find(char *out)
+{
+    if (s_path[0]) {
+        snprintf(out, KICAD_CLI_MAX_PATH, "%s", s_path);
         return KICLI_OK;
     }
 
-    /* 1. Environment variable override */
+    /* 1. Env var override */
     const char *env = getenv("KICAD_CLI_PATH");
     if (env && access(env, F_OK) == 0) {
-        strncpy(_cached_path, env, KICAD_CLI_MAX_PATH - 1);
-        strncpy(out, _cached_path, KICAD_CLI_MAX_PATH - 1);
+        snprintf(s_path, sizeof(s_path), "%s", env);
+        snprintf(out, KICAD_CLI_MAX_PATH, "%s", s_path);
         return KICLI_OK;
     }
 
-    /* 2. Platform default paths */
-    for (int i = 0; default_paths[i] != NULL; i++) {
+    /* 2. Saved config */
+    kicli_config_t cfg;
+    kicli_config_load(&cfg);
+    if (cfg.kicad_path[0] && access(cfg.kicad_path, F_OK) == 0) {
+        snprintf(s_path, sizeof(s_path), "%s", cfg.kicad_path);
+        snprintf(out, KICAD_CLI_MAX_PATH, "%s", s_path);
+        return KICLI_OK;
+    }
+
+    /* 3. Platform defaults */
+    for (int i = 0; default_paths[i]; i++) {
         if (access(default_paths[i], F_OK) == 0) {
-            strncpy(_cached_path, default_paths[i], KICAD_CLI_MAX_PATH - 1);
-            strncpy(out, _cached_path, KICAD_CLI_MAX_PATH - 1);
+            snprintf(s_path, sizeof(s_path), "%s", default_paths[i]);
+            snprintf(out, KICAD_CLI_MAX_PATH, "%s", s_path);
+            /* save so next run is instant */
+            cfg.kicad_path[0] = '\0';
+            snprintf(cfg.kicad_path, sizeof(cfg.kicad_path), "%s", s_path);
+            kicli_config_save(&cfg);
             return KICLI_OK;
         }
     }
 
-    /* 3. Search PATH */
-    if (find_in_path(_cached_path)) {
-        strncpy(out, _cached_path, KICAD_CLI_MAX_PATH - 1);
+    /* 4. PATH search */
+    if (find_in_path(s_path)) {
+        snprintf(out, KICAD_CLI_MAX_PATH, "%s", s_path);
+        snprintf(cfg.kicad_path, sizeof(cfg.kicad_path), "%s", s_path);
+        kicli_config_save(&cfg);
         return KICLI_OK;
     }
 
     kicli_set_error(
-        "kicad-cli not found. Install KiCad 10 or set KICAD_CLI_PATH.\n"
-        "  macOS:   /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli\n"
-        "  Windows: C:\\Program Files\\KiCad\\bin\\kicad-cli.exe\n"
-        "  Linux:   sudo apt install kicad  (or equivalent)"
+        "kicad-cli not found.\n"
+        "Install KiCad 10, or set the path with:\n"
+        "  kicli config kicad-path /path/to/kicad-cli"
     );
     return KICLI_ERR_NOT_FOUND;
 }
 
+kicli_err_t kicad_cli_set_path(const char *path)
+{
+    if (!path || !path[0]) {
+        kicli_set_error("path cannot be empty");
+        return KICLI_ERR_INVALID_ARG;
+    }
+    if (access(path, F_OK) != 0) {
+        kicli_set_error("'%s' does not exist", path);
+        return KICLI_ERR_NOT_FOUND;
+    }
+
+    snprintf(s_path, sizeof(s_path), "%s", path);
+
+    kicli_config_t cfg;
+    kicli_config_load(&cfg);
+    snprintf(cfg.kicad_path, sizeof(cfg.kicad_path), "%s", path);
+    if (kicli_config_save(&cfg) != 0) {
+        kicli_set_error("failed to save config");
+        return KICLI_ERR_IO;
+    }
+    return KICLI_OK;
+}
+
 /* ── Build command string ────────────────────────────────────────────────── */
 
-/*
- * Build a single shell command string from kicad-cli path + args array.
- * Returns heap-allocated string; caller frees.
- */
-static char *build_command(const char *cli_path, const char *const *args) {
-    /* Calculate total length */
-    size_t len = strlen(cli_path) + 4; /* quotes + space */
-    for (int i = 0; args[i] != NULL; i++) {
-        len += strlen(args[i]) + 3; /* space + quotes */
-    }
+static char *build_cmd(const char *cli, const char *const *args)
+{
+    size_t len = strlen(cli) + 4;
+    for (int i = 0; args[i]; i++) len += strlen(args[i]) + 3;
 
     char *cmd = malloc(len);
     if (!cmd) return NULL;
 
-    /* Quote the executable path (handles spaces in "Program Files") */
-#ifdef _WIN32
-    snprintf(cmd, len, "\"%s\"", cli_path);
-#else
-    snprintf(cmd, len, "\"%s\"", cli_path);
-#endif
-
-    for (int i = 0; args[i] != NULL; i++) {
+    snprintf(cmd, len, "\"%s\"", cli);
+    for (int i = 0; args[i]; i++) {
         strncat(cmd, " \"", len - strlen(cmd) - 1);
         strncat(cmd, args[i], len - strlen(cmd) - 1);
-        strncat(cmd, "\"", len - strlen(cmd) - 1);
+        strncat(cmd, "\"",    len - strlen(cmd) - 1);
     }
-
     return cmd;
 }
 
 /* ── kicad_cli_run ───────────────────────────────────────────────────────── */
 
-kicli_err_t kicad_cli_run(const char *const *args) {
-    char cli_path[KICAD_CLI_MAX_PATH];
-    kicli_err_t err = kicad_cli_find(cli_path);
+kicli_err_t kicad_cli_run(const char *const *args)
+{
+    char cli[KICAD_CLI_MAX_PATH];
+    kicli_err_t err = kicad_cli_find(cli);
     if (err != KICLI_OK) return err;
 
-    char *cmd = build_command(cli_path, args);
-    if (!cmd) {
-        kicli_set_error("out of memory");
-        return KICLI_ERR_OOM;
-    }
+    char *cmd = build_cmd(cli, args);
+    if (!cmd) { kicli_set_error("out of memory"); return KICLI_ERR_OOM; }
 
     int ret = system(cmd);
     free(cmd);
@@ -180,64 +203,42 @@ kicli_err_t kicad_cli_run(const char *const *args) {
 
 /* ── kicad_cli_capture ───────────────────────────────────────────────────── */
 
-kicli_err_t kicad_cli_capture(const char *const *args, char **output) {
-    char cli_path[KICAD_CLI_MAX_PATH];
-    kicli_err_t err = kicad_cli_find(cli_path);
+kicli_err_t kicad_cli_capture(const char *const *args, char **output)
+{
+    char cli[KICAD_CLI_MAX_PATH];
+    kicli_err_t err = kicad_cli_find(cli);
     if (err != KICLI_OK) return err;
 
-    char *cmd = build_command(cli_path, args);
-    if (!cmd) {
-        kicli_set_error("out of memory");
-        return KICLI_ERR_OOM;
-    }
+    char *cmd = build_cmd(cli, args);
+    if (!cmd) { kicli_set_error("out of memory"); return KICLI_ERR_OOM; }
 
 #ifdef _WIN32
-    /*
-     * On Windows, kicad-cli does not write to stdout when it is a pipe
-     * (popen creates a pipe). Use a temp file redirect instead.
-     */
-    char tmp_dir[MAX_PATH];
-    GetTempPathA(MAX_PATH, tmp_dir);
-    char tmp_path[MAX_PATH];
-    snprintf(tmp_path, sizeof(tmp_path), "%skicli_cap_%lu.txt",
-             tmp_dir, (unsigned long)GetCurrentProcessId());
+    /* Windows: popen doesn't work well with quoted paths; use temp file */
+    char tmp[MAX_PATH + 64];
+    char dir[MAX_PATH];
+    GetTempPathA(MAX_PATH, dir);
+    snprintf(tmp, sizeof(tmp), "%skicli_cap_%lu.txt",
+             dir, (unsigned long)GetCurrentProcessId());
 
-    /*
-     * cmd.exe /c quirk: when the command string starts with a quote (because
-     * the executable path has spaces), cmd.exe consumes that first quote and
-     * the result is parsed incorrectly (e.g. "C:\Program Files\..." becomes
-     * "C:\Program" which fails). The fix is to wrap the ENTIRE command in one
-     * extra pair of outer quotes. cmd.exe strips those outer quotes and then
-     * correctly sees the quoted executable path and the redirect.
-     */
     char cmd2[4096];
-    snprintf(cmd2, sizeof(cmd2), "\"%s >\"%s\" 2>nul\"", cmd, tmp_path);
+    snprintf(cmd2, sizeof(cmd2), "\"%s >\"%s\" 2>nul\"", cmd, tmp);
     free(cmd);
 
-    int sysret = system(cmd2);
-    if (sysret != 0) {
-        DeleteFileA(tmp_path);
-        kicli_set_error("kicad-cli exited with code %d", sysret);
+    if (system(cmd2) != 0) {
+        DeleteFileA(tmp);
+        kicli_set_error("kicad-cli failed");
         return KICLI_ERR_SUBPROCESS;
     }
 
-    FILE *tf = fopen(tmp_path, "rb");
-    if (!tf) {
-        DeleteFileA(tmp_path);
-        kicli_set_error("cannot read capture output: %s", tmp_path);
-        return KICLI_ERR_IO;
-    }
+    FILE *tf = fopen(tmp, "rb");
+    if (!tf) { DeleteFileA(tmp); kicli_set_error("cannot read output"); return KICLI_ERR_IO; }
     fseek(tf, 0, SEEK_END);
-    long sz = ftell(tf);
-    rewind(tf);
-
+    long sz = ftell(tf); rewind(tf);
     char *buf = malloc((size_t)(sz < 0 ? 1 : sz + 1));
-    if (!buf) { fclose(tf); DeleteFileA(tmp_path); return KICLI_ERR_OOM; }
-    size_t nread = (sz > 0) ? fread(buf, 1, (size_t)sz, tf) : 0;
-    buf[nread] = '\0';
-    fclose(tf);
-    DeleteFileA(tmp_path);
-
+    if (!buf) { fclose(tf); DeleteFileA(tmp); return KICLI_ERR_OOM; }
+    size_t n = (sz > 0) ? fread(buf, 1, (size_t)sz, tf) : 0;
+    buf[n] = '\0';
+    fclose(tf); DeleteFileA(tmp);
     *output = buf;
     return KICLI_OK;
 
@@ -247,37 +248,26 @@ kicli_err_t kicad_cli_capture(const char *const *args, char **output) {
     free(cmd);
 
     FILE *fp = popen(cmd2, "r");
-    if (!fp) {
-        kicli_set_error("failed to run kicad-cli: %s", cmd2);
-        return KICLI_ERR_SUBPROCESS;
-    }
+    if (!fp) { kicli_set_error("failed to run kicad-cli"); return KICLI_ERR_SUBPROCESS; }
 
-    /* Read all output */
     size_t size = 0, cap = 4096;
     char *buf = malloc(cap);
     if (!buf) { pclose(fp); return KICLI_ERR_OOM; }
 
-    size_t n;
-    char tmp[1024];
-    while ((n = fread(tmp, 1, sizeof(tmp), fp)) > 0) {
-        if (size + n + 1 > cap) {
-            cap = (size + n + 1) * 2;
+    char tmp2[1024];
+    size_t nr;
+    while ((nr = fread(tmp2, 1, sizeof(tmp2), fp)) > 0) {
+        if (size + nr + 1 > cap) {
+            cap = (size + nr + 1) * 2;
             char *nb = realloc(buf, cap);
             if (!nb) { free(buf); pclose(fp); return KICLI_ERR_OOM; }
             buf = nb;
         }
-        memcpy(buf + size, tmp, n);
-        size += n;
+        memcpy(buf + size, tmp2, nr);
+        size += nr;
     }
     buf[size] = '\0';
-
-    int ret = pclose(fp);
-    if (ret != 0) {
-        free(buf);
-        kicli_set_error("kicad-cli exited with code %d", ret);
-        return KICLI_ERR_SUBPROCESS;
-    }
-
+    pclose(fp);
     *output = buf;
     return KICLI_OK;
 #endif
@@ -285,26 +275,22 @@ kicli_err_t kicad_cli_capture(const char *const *args, char **output) {
 
 /* ── kicad_cli_version ───────────────────────────────────────────────────── */
 
-kicli_err_t kicad_cli_version(char *out) {
-    static char _cached_version[32] = {0};
-
-    if (_cached_version[0] != '\0') {
-        strncpy(out, _cached_version, 31);
-        return KICLI_OK;
-    }
+kicli_err_t kicad_cli_version(char *out)
+{
+    static char s_ver[32] = {0};
+    if (s_ver[0]) { snprintf(out, 32, "%s", s_ver); return KICLI_OK; }
 
     const char *args[] = {"version", "--format", "plain", NULL};
-    char *output = NULL;
-    kicli_err_t err = kicad_cli_capture(args, &output);
+    char *raw = NULL;
+    kicli_err_t err = kicad_cli_capture(args, &raw);
     if (err != KICLI_OK) return err;
 
-    /* Strip trailing newline */
-    size_t len = strlen(output);
-    while (len > 0 && (output[len-1] == '\n' || output[len-1] == '\r'))
-        output[--len] = '\0';
+    /* strip trailing newline */
+    size_t len = strlen(raw);
+    while (len > 0 && (raw[len-1] == '\n' || raw[len-1] == '\r')) raw[--len] = '\0';
 
-    strncpy(_cached_version, output, sizeof(_cached_version) - 1);
-    strncpy(out, _cached_version, 31);
-    free(output);
+    snprintf(s_ver, sizeof(s_ver), "%s", raw);
+    snprintf(out, 32, "%s", s_ver);
+    free(raw);
     return KICLI_OK;
 }
