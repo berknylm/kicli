@@ -8,6 +8,10 @@
 #include <sys/stat.h>
 #include <errno.h>
 
+#ifdef _WIN32
+#  include <direct.h>   /* _mkdir */
+#endif
+
 #include "kicli/fetch.h"
 #include "kicli/error.h"
 #include "cJSON.h"

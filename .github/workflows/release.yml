@@ -53,7 +53,7 @@ jobs:
         if: runner.os == 'Windows'
         # vcpkg is pre-installed on windows-latest at VCPKG_INSTALLATION_ROOT
         # Use static triplet so the binary has no DLL dependency
-        run: vcpkg install curl:x64-windows-static --triplet x64-windows-static
+        run: vcpkg install curl:x64-windows-static
 
       # ── Configure ─────────────────────────────────────────────────────────
 
@@ -70,10 +70,11 @@ jobs:
         # Use VCPKG_INSTALLATION_ROOT directly — no need to re-export it
         run: |
           cmake -B build/release `
+            -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-            -DCURL_STATIC_LIBS=ON
+            -DCURL_USE_STATIC_LIBS=ON
 
       # ── Build ─────────────────────────────────────────────────────────────
 
@@ -83,7 +84,7 @@ jobs:
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: cmake --build build/release --config Release
+        run: cmake --build build/release
 
       # ── Package ───────────────────────────────────────────────────────────
 
@@ -99,7 +100,6 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           New-Item -ItemType Directory -Force -Path dist
-          # MSVC puts the binary in bin/Release/ with multi-config generators
           $bin = Get-ChildItem -Path build/release -Recurse -Filter kicli.exe | Select-Object -First 1
           Copy-Item $bin.FullName dist/kicli.exe
           Compress-Archive -Path dist/kicli.exe -DestinationPath ${{ matrix.artifact }}.zip
@@ -126,7 +126,7 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: always()   # run even if some platform builds failed
+    if: ${{ !cancelled() }}   # run even if some platform builds failed, but not if workflow was cancelled
     permissions:
       contents: write
 

@@ -25,7 +25,9 @@ static const char *default_paths[] = {
     "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
     /* Homebrew cask installs to same location */
 #elif defined(_WIN32)
+    "C:\\Program Files\\KiCad\\10.0\\bin\\kicad-cli.exe",
     "C:\\Program Files\\KiCad\\bin\\kicad-cli.exe",
+    "C:\\Program Files (x86)\\KiCad\\10.0\\bin\\kicad-cli.exe",
     "C:\\Program Files (x86)\\KiCad\\bin\\kicad-cli.exe",
     /* Scoop installs */
     /* Users can override with KICAD_CLI_PATH */
@@ -189,14 +191,59 @@ kicli_err_t kicad_cli_capture(const char *const *args, char **output) {
         return KICLI_ERR_OOM;
     }
 
-    /* Redirect stderr to /dev/null so we only capture stdout */
 #ifdef _WIN32
+    /*
+     * On Windows, kicad-cli does not write to stdout when it is a pipe
+     * (popen creates a pipe). Use a temp file redirect instead.
+     */
+    char tmp_dir[MAX_PATH];
+    GetTempPathA(MAX_PATH, tmp_dir);
+    char tmp_path[MAX_PATH];
+    snprintf(tmp_path, sizeof(tmp_path), "%skicli_cap_%lu.txt",
+             tmp_dir, (unsigned long)GetCurrentProcessId());
+
+    /*
+     * cmd.exe /c quirk: when the command string starts with a quote (because
+     * the executable path has spaces), cmd.exe consumes that first quote and
+     * the result is parsed incorrectly (e.g. "C:\Program Files\..." becomes
+     * "C:\Program" which fails). The fix is to wrap the ENTIRE command in one
+     * extra pair of outer quotes. cmd.exe strips those outer quotes and then
+     * correctly sees the quoted executable path and the redirect.
+     */
     char cmd2[4096];
-    snprintf(cmd2, sizeof(cmd2), "%s 2>nul", cmd);
+    snprintf(cmd2, sizeof(cmd2), "\"%s >\"%s\" 2>nul\"", cmd, tmp_path);
+    free(cmd);
+
+    int sysret = system(cmd2);
+    if (sysret != 0) {
+        DeleteFileA(tmp_path);
+        kicli_set_error("kicad-cli exited with code %d", sysret);
+        return KICLI_ERR_SUBPROCESS;
+    }
+
+    FILE *tf = fopen(tmp_path, "rb");
+    if (!tf) {
+        DeleteFileA(tmp_path);
+        kicli_set_error("cannot read capture output: %s", tmp_path);
+        return KICLI_ERR_IO;
+    }
+    fseek(tf, 0, SEEK_END);
+    long sz = ftell(tf);
+    rewind(tf);
+
+    char *buf = malloc((size_t)(sz < 0 ? 1 : sz + 1));
+    if (!buf) { fclose(tf); DeleteFileA(tmp_path); return KICLI_ERR_OOM; }
+    size_t nread = (sz > 0) ? fread(buf, 1, (size_t)sz, tf) : 0;
+    buf[nread] = '\0';
+    fclose(tf);
+    DeleteFileA(tmp_path);
+
+    *output = buf;
+    return KICLI_OK;
+
 #else
     char cmd2[4096];
     snprintf(cmd2, sizeof(cmd2), "%s 2>/dev/null", cmd);
-#endif
     free(cmd);
 
     FILE *fp = popen(cmd2, "r");
@@ -233,6 +280,7 @@ kicli_err_t kicad_cli_capture(const char *const *args, char **output) {
 
     *output = buf;
     return KICLI_OK;
+#endif
 }
 
 /* ── kicad_cli_version ───────────────────────────────────────────────────── */

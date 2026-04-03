@@ -100,15 +100,14 @@ static char *http_post_json(const char *url, const char *body) {
  */
 static char *generate_kicad_sym(const char *name, const char *id,
                                  const char *description, const char *ref_prefix) {
-    /* We build the symbol entry (without the library wrapper) */
-    char *buf = NULL;
-    size_t buf_size = 0;
-    FILE *ms = open_memstream(&buf, &buf_size);
-    if (!ms) return NULL;
-
     const char *prefix = (ref_prefix && ref_prefix[0]) ? ref_prefix : "U";
-    /* Escape double-quotes in name/description */
-    fprintf(ms,
+
+    /* Allocate a buffer large enough for the template + variable content */
+    size_t cap = 2048 + 4 * strlen(name) + strlen(id) + strlen(description);
+    char *buf = malloc(cap);
+    if (!buf) return NULL;
+
+    snprintf(buf, cap,
         "  (symbol \"%s\"\n"
         "    (pin_names (offset 1.016))\n"
         "    (in_bom yes) (on_board yes)\n"
@@ -147,7 +146,6 @@ static char *generate_kicad_sym(const char *name, const char *id,
         "  )\n",
         name, prefix, name, description, id, name, name);
 
-    fclose(ms);
     return buf;
 }
 
@@ -261,11 +259,10 @@ kicli_err_t lcsc_fetch(const char *id, const kicli_config_t *cfg,
                 }
             }
 
-            char *fp_buf = NULL;
-            size_t fp_size = 0;
-            FILE *fms = open_memstream(&fp_buf, &fp_size);
-            if (fms) {
-                fprintf(fms,
+            size_t fp_cap = 512 + strlen(pkg_name) + strlen(comp_desc);
+            char *fp_buf = malloc(fp_cap);
+            if (fp_buf) {
+                snprintf(fp_buf, fp_cap,
                     "(footprint \"%s\"\n"
                     "  (version 20231120)\n"
                     "  (generator kicli)\n"
@@ -274,7 +271,6 @@ kicli_err_t lcsc_fetch(const char *id, const kicli_config_t *cfg,
                     "  (attr smd)\n"
                     ")\n",
                     pkg_name, comp_desc);
-                fclose(fms);
                 assets->footprint_mod = fp_buf;
             }
         }
@@ -295,7 +291,14 @@ kicli_err_t lcsc_fetch(const char *id, const kicli_config_t *cfg,
                              uuid_j->valuestring);
 
                     char tmp_path[256];
+#ifdef _WIN32
+                    const char *tmp_dir = getenv("TEMP");
+                    if (!tmp_dir) tmp_dir = getenv("TMP");
+                    if (!tmp_dir) tmp_dir = "C:\\Temp";
+                    snprintf(tmp_path, sizeof(tmp_path), "%s\\kicli_%s.step", tmp_dir, id);
+#else
                     snprintf(tmp_path, sizeof(tmp_path), "/tmp/kicli_%s.step", id);
+#endif
 
                     printf("  Downloading 3D model...\n");
                     struct dyn_buf step_buf = {NULL, 0};
