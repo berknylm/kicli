@@ -1,17 +1,9 @@
 /*
  * sch.c — kicli sch <file> <command>
  *
- * M3 commands (own parser):
- *   list      one component per line: REF  VALUE  LIB_ID  FOOTPRINT
- *   info      detailed component properties
- *   nets      all net labels
- *   tree      schematic summary / hierarchy
- *   stats     count summary
- *
- * M4 passthrough to kicad-cli:
- *   export    pdf/svg/netlist/bom
- *   erc       electrical rules check
- *   upgrade   upgrade schematic format
+ * M3 (own parser):  list, info, nets, tree, stats
+ * M4 (kicad-cli):   export, erc, upgrade
+ * M3+ (kicad-cli+parse): dump → .kisch format
  */
 
 #include <stdio.h>
@@ -22,6 +14,9 @@
 #include "kicli/error.h"
 #include "kicli/config.h"
 #include "kicli/kicad_cli.h"
+
+/* forward declaration — implemented in dump.c */
+int cmd_sch_dump(const char *sch_path, int argc, char **argv);
 
 #define CLR_RESET  "\x1b[0m"
 #define CLR_BOLD   "\x1b[1m"
@@ -269,11 +264,12 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
         printf("  nets                 List all net labels\n");
         printf("  tree                 Schematic summary\n");
         printf("  stats                Count summary\n");
+        printf("  dump [-o file.kisch] Export .kisch format (full pin+net table)\n");
         printf("\n" CLR_BOLD "kicad-cli passthrough:\n" CLR_RESET);
         printf("  export <fmt>         Export (pdf/svg/netlist/bom)\n");
         printf("  erc                  Electrical rules check\n");
         printf("  upgrade              Upgrade schematic format\n");
-        printf("\n" CLR_BOLD "Write commands (M5 — coming soon):\n" CLR_RESET);
+        printf("\n" CLR_BOLD "Write (coming in M5):\n" CLR_RESET);
         printf("  set <REF> <FIELD> <VALUE>\n");
         printf("  add <LIB:SYM> --ref R5 --value 10k\n");
         printf("  remove <REF>\n");
@@ -291,10 +287,11 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
 
     const char *subcmd = argv[2];
 
-    /* kicad-cli passthrough commands don't need our parser */
+    /* kicad-cli passthrough / dump — no sexpr parse needed */
     if (strcmp(subcmd, "export")  == 0) return cmd_sch_export(sch_path, argc - 3, argv + 3);
     if (strcmp(subcmd, "erc")     == 0) return cmd_sch_erc(sch_path, argc - 3, argv + 3);
     if (strcmp(subcmd, "upgrade") == 0) return cmd_sch_upgrade(sch_path);
+    if (strcmp(subcmd, "dump")    == 0) return cmd_sch_dump(sch_path, argc - 3, argv + 3);
 
     /* M5 stubs */
     if (strcmp(subcmd, "set") == 0 || strcmp(subcmd, "add") == 0 ||
