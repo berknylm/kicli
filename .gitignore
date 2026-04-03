@@ -1,8 +1,9 @@
-# Rust
+# Build output
+build/
 /target/
 Cargo.lock
 
-# Examples (reference repos)
+# Examples (reference repos, not committed)
 examples/
 
 # macOS
