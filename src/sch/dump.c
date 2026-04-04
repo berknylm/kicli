@@ -1,22 +1,18 @@
 /*
- * dump.c — kicli sch FILE dump
+ * dump.c — kicli sch FILE dump  →  .kisch format
  *
- * Exports .kisch format: component-centric, pin-explicit, agent-friendly.
+ * Every pin line is self-contained and grep-friendly:
  *
- *   [U1: NRF52840]
- *     1     VDD           power_in      → VCC
- *     21    NRST          input         → NRST
- *     29    SWDIO         bidir         → SWDIO
+ *   [U1: CAT24C256]
+ *   U1:1   A0    in     → Net-(U1-A0)
+ *   U1:5   SDA   bidir  → I2C2.SDA
+ *   U1:8   VCC   pwr    → +3V3
  *
- * Usage:
- *   kicli sch board.kicad_sch dump              stdout
- *   kicli sch board.kicad_sch dump -o out.kisch file
- *
- * Implementation:
- *   1. Run kicad-cli to export kicadsexpr netlist → temp file
- *   2. Parse with our sexpr_parse (same parser used for .kicad_sch)
- *   3. Build component → pins[] map from (components) and (nets) sections
- *   4. Sort pins numerically, output .kisch
+ * grep patterns:
+ *   grep '^U1:'       all U1 pins
+ *   grep '→ VCC'      everything on VCC
+ *   grep 'bidir'      bidirectional pins
+ *   grep '→ NC'       unconnected pins
  */
 
 #include <stdio.h>
@@ -27,10 +23,10 @@
 #ifdef _WIN32
 #  include <windows.h>
 #  include <io.h>
-#  define F_OK 0
-#  define access _access
-#  define unlink _unlink
-#  define getpid GetCurrentProcessId
+#  define unlink   _unlink
+#  define getpid   GetCurrentProcessId
+#  define F_OK     0
+#  define access   _access
 #else
 #  include <unistd.h>
 #endif
@@ -39,13 +35,36 @@
 #include "kicli/kicad_cli.h"
 #include "kicli/error.h"
 
-/* ── Data model ──────────────────────────────────────────────────────────── */
+/* ── Pin type abbreviations ─────────────────────────────────────────────── */
+/*
+ * KiCad appends "+no_connect" to the base type when a no-connect marker
+ * is placed on the pin. We match on prefix only.
+ */
+static const char *short_type(const char *t)
+{
+    if (!t || !t[0])                            return "-";
+    if (strncmp(t, "passive",       7)  == 0)  return "pass";
+    if (strncmp(t, "input",         5)  == 0)  return "in";
+    if (strncmp(t, "output",        6)  == 0)  return "out";
+    if (strncmp(t, "bidirectional", 13) == 0)  return "bidir";
+    if (strncmp(t, "tristate",      8)  == 0)  return "tri";
+    if (strncmp(t, "power_in",      8)  == 0)  return "pwr";
+    if (strncmp(t, "power_out",     9)  == 0)  return "pwr";
+    if (strncmp(t, "open_collector",14) == 0)  return "oc";
+    if (strncmp(t, "open_emitter",  12) == 0)  return "oe";
+    if (strncmp(t, "unspecified",   11) == 0)  return "-";
+    if (strncmp(t, "no_connect",    10) == 0)  return "-";
+    if (strncmp(t, "free",           4) == 0)  return "free";
+    return "-";
+}
+
+/* ── Data model ─────────────────────────────────────────────────────────── */
 
 typedef struct {
-    char num[32];    /* pin number (may be alpha: "A1", "GND") */
-    char name[64];   /* pin function name */
-    char type[32];   /* pin type: passive, input, output, bidir, power_in … */
-    char net[128];   /* net name, or "NC" */
+    char num[32];
+    char name[64];
+    char type[48];   /* raw type from netlist (may have +no_connect suffix) */
+    char net[128];
 } kisch_pin_t;
 
 typedef struct {
@@ -56,9 +75,8 @@ typedef struct {
     size_t       cap_pins;
 } kisch_comp_t;
 
-/* ── Helpers ─────────────────────────────────────────────────────────────── */
+/* ── Helpers ────────────────────────────────────────────────────────────── */
 
-/* Find existing component by ref, or append a new one. */
 static kisch_comp_t *get_or_add(kisch_comp_t **arr, size_t *count,
                                  size_t *cap, const char *ref)
 {
@@ -80,6 +98,10 @@ static kisch_comp_t *get_or_add(kisch_comp_t **arr, size_t *count,
 static void add_pin(kisch_comp_t *c, const char *num, const char *name,
                     const char *type, const char *net)
 {
+    /* skip duplicate pins (multi-unit components appear once per unit) */
+    for (size_t i = 0; i < c->num_pins; i++)
+        if (strcmp(c->pins[i].num, num ? num : "") == 0) return;
+
     if (c->num_pins >= c->cap_pins) {
         c->cap_pins = c->cap_pins ? c->cap_pins * 2 : 8;
         kisch_pin_t *tmp = realloc(c->pins, c->cap_pins * sizeof(kisch_pin_t));
@@ -93,46 +115,38 @@ static void add_pin(kisch_comp_t *c, const char *num, const char *name,
     snprintf(p->net,  sizeof(p->net),  "%s", net  ? net  : "NC");
 }
 
-/* Strip leading "/" from KiCad net names. Shorten unconnected names. */
+/* Strip leading "/" from KiCad net names. Shorten unconnected pseudo-names. */
 static void clean_net(const char *in, char *out, size_t sz)
 {
     if (!in || !in[0]) { snprintf(out, sz, "NC"); return; }
     if (strncmp(in, "unconnected", 11) == 0) { snprintf(out, sz, "NC"); return; }
     const char *p = in;
-    while (*p == '/') p++;        /* strip leading slashes */
+    while (*p == '/') p++;
     snprintf(out, sz, "%s", p[0] ? p : "NC");
 }
 
-/* Pin sort: numeric first, then lexicographic fallback. */
+/* Sort pins: numeric first, then lexicographic. */
 static int pin_cmp(const void *a, const void *b)
 {
     const kisch_pin_t *pa = a, *pb = b;
-
-    /* Check if both are purely numeric */
     int all_a = 1, all_b = 1;
     for (const char *p = pa->num; *p; p++) if (!isdigit((unsigned char)*p)) { all_a = 0; break; }
     for (const char *p = pb->num; *p; p++) if (!isdigit((unsigned char)*p)) { all_b = 0; break; }
-
-    if (all_a && all_b) {
-        int na = atoi(pa->num), nb = atoi(pb->num);
-        return na - nb;
-    }
+    if (all_a && all_b) return atoi(pa->num) - atoi(pb->num);
     return strcmp(pa->num, pb->num);
 }
 
-/* Free component array */
 static void free_comps(kisch_comp_t *comps, size_t count)
 {
     for (size_t i = 0; i < count; i++) free(comps[i].pins);
     free(comps);
 }
 
-/* ── Netlist → kisch_comp_t[] ────────────────────────────────────────────── */
+/* ── Parse kicadsexpr netlist ────────────────────────────────────────────── */
 
 static int parse_netlist(const char *path,
                          kisch_comp_t **out, size_t *count_out)
 {
-    /* Read file */
     FILE *f = fopen(path, "rb");
     if (!f) { kicli_set_error("cannot open netlist '%s'", path); return -1; }
     fseek(f, 0, SEEK_END);
@@ -151,7 +165,7 @@ static int parse_netlist(const char *path,
     kisch_comp_t *comps = NULL;
     size_t count = 0, cap = 0;
 
-    /* 1. (components (comp (ref "X") (value "Y") ...) ...) */
+    /* 1. (components ...) → ref, value */
     sexpr_t *comp_list = sexpr_get(root, "components");
     if (comp_list) {
         for (size_t i = 1; i < comp_list->num_children; i++) {
@@ -166,18 +180,17 @@ static int parse_netlist(const char *path,
         }
     }
 
-    /* 2. (nets (net (name "N") (node (ref "X") (pin "1") ...) ...) ...) */
+    /* 2. (nets ...) → pin assignments */
     sexpr_t *nets_list = sexpr_get(root, "nets");
     if (nets_list) {
         for (size_t i = 1; i < nets_list->num_children; i++) {
             sexpr_t *net = nets_list->children[i];
             if (!net || net->type != SEXPR_LIST) continue;
 
-            const char *raw_name = sexpr_atom_value(net, "name");
+            const char *raw = sexpr_atom_value(net, "name");
             char net_name[128];
-            clean_net(raw_name, net_name, sizeof(net_name));
+            clean_net(raw, net_name, sizeof(net_name));
 
-            /* walk child nodes */
             for (size_t j = 1; j < net->num_children; j++) {
                 sexpr_t *node = net->children[j];
                 if (!node || node->type != SEXPR_LIST || !node->num_children) continue;
@@ -199,7 +212,6 @@ static int parse_netlist(const char *path,
 
     sexpr_free(root);
 
-    /* Sort each component's pins */
     for (size_t i = 0; i < count; i++)
         qsort(comps[i].pins, comps[i].num_pins, sizeof(kisch_pin_t), pin_cmp);
 
@@ -214,60 +226,64 @@ oom:
     return -1;
 }
 
-/* ── Output ──────────────────────────────────────────────────────────────── */
+/* ── Output ─────────────────────────────────────────────────────────────── */
 
 static void write_kisch(FILE *f, const char *sch_path,
                         const kisch_comp_t *comps, size_t count)
 {
+    /* Count total pins and compute file-wide column widths */
+    size_t total_pins = 0;
+    int w_refpin = 4, w_name = 4, w_type = 4;
+
+    for (size_t i = 0; i < count; i++) {
+        const kisch_comp_t *c = &comps[i];
+        total_pins += c->num_pins;
+        for (size_t j = 0; j < c->num_pins; j++) {
+            const kisch_pin_t *p = &c->pins[j];
+            int rp = (int)strlen(c->ref) + 1 + (int)strlen(p->num);
+            int nm = (int)strlen(p->name);
+            int tp = (int)strlen(short_type(p->type));
+            if (rp > w_refpin) w_refpin = rp;
+            if (nm > w_name)   w_name   = nm;
+            if (tp > w_type)   w_type   = tp;
+        }
+    }
+    w_refpin += 1;
+    w_name   += 1;
+    w_type   += 1;
+
     /* Header */
     const char *fname = strrchr(sch_path, '/');
 #ifdef _WIN32
     const char *fname2 = strrchr(sch_path, '\\');
     if (!fname || (fname2 && fname2 > fname)) fname = fname2;
 #endif
-    fprintf(f, "# %s\n", fname ? fname + 1 : sch_path);
-    fprintf(f, "# .kisch — kicli schematic text format\n");
-    fprintf(f, "#\n");
-    fprintf(f, "# Columns: pin_num  pin_name  pin_type  → net\n");
-    fprintf(f, "# grep examples:\n");
-    fprintf(f, "#   grep '→ VCC'        find everything on VCC\n");
-    fprintf(f, "#   grep '^\\[U1'        show U1 block\n");
-    fprintf(f, "#   grep 'power_in'     find all power pins\n");
-    fprintf(f, "#   grep '→ NC'         find unconnected pins\n");
+    fprintf(f, "# %s  (%zu components, %zu pins)\n",
+            fname ? fname + 1 : sch_path, count, total_pins);
+    fprintf(f, "# REF:PIN  NAME  TYPE  → NET\n");
+    fprintf(f, "# grep: '^U1:'  '→ VCC'  'bidir'  '→ NC'\n");
     fprintf(f, "\n");
 
     for (size_t i = 0; i < count; i++) {
         const kisch_comp_t *c = &comps[i];
 
-        /* Component header */
+        /* Component header (just for context — not a data line) */
         if (c->value[0])
             fprintf(f, "[%s: %s]\n", c->ref, c->value);
         else
             fprintf(f, "[%s]\n", c->ref);
 
         if (c->num_pins == 0) {
-            fprintf(f, "  (no connected pins)\n");
+            fprintf(f, "# (no connected pins)\n");
         } else {
-            /* Compute column widths for this component */
-            int w_num = 4, w_name = 6, w_type = 7;
-            for (size_t j = 0; j < c->num_pins; j++) {
-                int n = (int)strlen(c->pins[j].num);
-                int k = (int)strlen(c->pins[j].name);
-                int t = (int)strlen(c->pins[j].type);
-                if (n > w_num)  w_num  = n;
-                if (k > w_name) w_name = k;
-                if (t > w_type) w_type = t;
-            }
-            w_num  += 2;
-            w_name += 2;
-            w_type += 2;
-
             for (size_t j = 0; j < c->num_pins; j++) {
                 const kisch_pin_t *p = &c->pins[j];
-                fprintf(f, "  %-*s  %-*s  %-*s  → %s\n",
-                        w_num,  p->num,
-                        w_name, p->name,
-                        w_type, p->type,
+                char refpin[96];
+                snprintf(refpin, sizeof(refpin), "%s:%s", c->ref, p->num);
+                fprintf(f, "%-*s  %-*s  %-*s  → %s\n",
+                        w_refpin, refpin,
+                        w_name,   p->name,
+                        w_type,   short_type(p->type),
                         p->net);
             }
         }
@@ -279,17 +295,14 @@ static void write_kisch(FILE *f, const char *sch_path,
 
 int cmd_sch_dump(const char *sch_path, int argc, char **argv)
 {
-    /* Parse -o / --output flag */
     const char *outfile = NULL;
     for (int i = 0; i < argc; i++) {
         if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0)
             && i + 1 < argc)
-        {
             outfile = argv[i + 1];
-        }
     }
 
-    /* Temp file for netlist */
+    /* Temp file for kicad-cli netlist output */
     char tmp[512];
 #ifdef _WIN32
     char tmpdir[MAX_PATH];
@@ -300,7 +313,6 @@ int cmd_sch_dump(const char *sch_path, int argc, char **argv)
     snprintf(tmp, sizeof(tmp), "/tmp/kicli_nl_%d.net", (int)getpid());
 #endif
 
-    /* Export netlist via kicad-cli */
     const char *args[] = {
         "sch", "export", "netlist",
         "--format", "kicadsexpr",
@@ -311,13 +323,11 @@ int cmd_sch_dump(const char *sch_path, int argc, char **argv)
 
     kicli_err_t err = kicad_cli_run(args);
     if (err != KICLI_OK) {
-        fprintf(stderr, "error: kicad-cli netlist export failed: %s\n",
-                kicli_last_error());
+        fprintf(stderr, "error: kicad-cli failed: %s\n", kicli_last_error());
         unlink(tmp);
         return 1;
     }
 
-    /* Parse netlist */
     kisch_comp_t *comps = NULL;
     size_t count = 0;
     if (parse_netlist(tmp, &comps, &count) != 0) {
@@ -327,7 +337,6 @@ int cmd_sch_dump(const char *sch_path, int argc, char **argv)
     }
     unlink(tmp);
 
-    /* Write output */
     FILE *f = stdout;
     if (outfile) {
         f = fopen(outfile, "w");
@@ -342,7 +351,10 @@ int cmd_sch_dump(const char *sch_path, int argc, char **argv)
 
     if (outfile) {
         fclose(f);
-        printf("wrote %s (%zu components)\n", outfile, count);
+        /* count total pins for summary */
+        size_t total = 0;
+        for (size_t i = 0; i < count; i++) total += comps[i].num_pins;
+        printf("wrote %s  (%zu components, %zu pins)\n", outfile, count, total);
     }
 
     free_comps(comps, count);
