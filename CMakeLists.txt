@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(kicli VERSION 0.3.0 LANGUAGES C)
+project(kicli VERSION 0.4.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -16,6 +16,18 @@ endif()
 # ── System libcurl (needed for fetch/stock when implemented) ─────────────────
 find_package(CURL REQUIRED)
 
+# ── Embed SKILLS.md as C string ─────────────────────────────────────────────
+set(SKILLS_HEADER "${CMAKE_BINARY_DIR}/generated/skills_md.h")
+add_custom_command(
+    OUTPUT  "${SKILLS_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT="${CMAKE_SOURCE_DIR}/SKILLS.md"
+        -DOUTPUT="${SKILLS_HEADER}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/embed_skills.cmake"
+    DEPENDS "${CMAKE_SOURCE_DIR}/SKILLS.md"
+    COMMENT "Embedding SKILLS.md"
+)
+
 # ── Sources ─────────────────────────────────────────────────────────────────
 file(GLOB_RECURSE KICLI_SOURCES
     src/*.c
@@ -29,11 +41,12 @@ file(GLOB_RECURSE KICLI_SOURCES
     src/jlcpcb/*.c
 )
 
-add_executable(kicli ${KICLI_SOURCES})
+add_executable(kicli ${KICLI_SOURCES} "${SKILLS_HEADER}")
 
 target_include_directories(kicli PRIVATE
     include
     ${CURL_INCLUDE_DIRS}
+    "${CMAKE_BINARY_DIR}/generated"
 )
 
 target_link_libraries(kicli PRIVATE

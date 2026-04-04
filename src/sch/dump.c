@@ -1,5 +1,5 @@
 /*
- * dump.c — kicli sch FILE dump  →  .kisch format
+ * dump.c — kicli sch FILE view  →  .kisch format
  *
  * Three-pass approach:
  *
@@ -710,9 +710,9 @@ static void write_kisch(FILE *f, const char *sch_path,
     }
 }
 
-/* ── Public: cmd_sch_dump ────────────────────────────────────────────────── */
+/* ── Public: cmd_sch_view ────────────────────────────────────────────────── */
 
-int cmd_sch_dump(const char *sch_path, int argc, char **argv)
+int cmd_sch_view(const char *sch_path, int argc, char **argv)
 {
     const char *outfile = NULL;
     for (int i = 0; i < argc; i++) {

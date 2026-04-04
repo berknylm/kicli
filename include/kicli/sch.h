@@ -179,9 +179,7 @@ kicli_lib_symbol_t *kicli_sch_find_lib_symbol(kicli_schematic_t *sch, const char
 bool kicli_sch_pin_position(const kicli_schematic_t *sch, const char *ref,
                              const char *pin_number, kicli_pt_t *out);
 
-/* ── Dump ────────────────────────────────────────────────────────────────── */
-
-kicli_err_t kicli_sch_dump_json(const kicli_schematic_t *sch, char **out_json); /* caller frees */
+/* ── View ────────────────────────────────────────────────────────────────── */
 
 /* ── Operations ──────────────────────────────────────────────────────────── */
 

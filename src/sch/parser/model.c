@@ -557,11 +557,7 @@ kicli_err_t kicli_sch_set_field(kicli_schematic_t *s, const char *ref,
 { (void)s;(void)ref;(void)field;(void)value;
   kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
 
-/* ── Stubs: dump / diff / validate / export ───────────────────────────────── */
-
-kicli_err_t kicli_sch_dump_json(const kicli_schematic_t *sch, char **out_json)
-{ (void)sch;(void)out_json;
-  kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
+/* ── Stubs: diff / validate / export ──────────────────────────────────────── */
 
 kicli_sch_diff_t *kicli_sch_diff(const kicli_schematic_t *a, const kicli_schematic_t *b)
 { (void)a;(void)b; return NULL; }
