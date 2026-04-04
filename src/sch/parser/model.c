@@ -261,6 +261,65 @@ static int parse_global_label(const sexpr_t *node, kicli_global_label_t *out)
     return 0;
 }
 
+/* ── Parse hierarchical label ─────────────────────────────────────────────── */
+
+static int parse_hier_label(const sexpr_t *node, kicli_hier_label_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    /* (hierarchical_label "TEXT" (shape input) (at x y angle) ...) */
+    if (node->num_children >= 2 && node->children[1]->value)
+        snprintf(out->text, sizeof(out->text), "%s", node->children[1]->value);
+    const char *shape = sexpr_atom_value(node, "shape");
+    if (shape) snprintf(out->shape, sizeof(out->shape), "%s", shape);
+    sexpr_t *at = sexpr_get(node, "at");
+    if (at && at->num_children >= 3) {
+        out->at.x = atof(at->children[1]->value);
+        out->at.y = atof(at->children[2]->value);
+    }
+    return 0;
+}
+
+/* ── Parse sheet (with hierarchical pins) ────────────────────────────────── */
+
+static int parse_sheet(const sexpr_t *node, kicli_sheet_t *out)
+{
+    memset(out, 0, sizeof(*out));
+
+    /* (property "Sheetname" "POWER") */
+    const char *name = get_property_value(node, "Sheetname");
+    if (name) snprintf(out->sheetname, sizeof(out->sheetname), "%s", name);
+
+    /* (property "Sheetfile" "power.kicad_sch") */
+    const char *file = get_property_value(node, "Sheetfile");
+    if (file) snprintf(out->sheetfile, sizeof(out->sheetfile), "%s", file);
+
+    /* count pins */
+    size_t pin_cap = 8;
+    out->pins = (kicli_sheet_pin_t *)malloc(pin_cap * sizeof(kicli_sheet_pin_t));
+    if (!out->pins) return -1;
+
+    for (size_t i = 0; i < node->num_children; i++) {
+        sexpr_t *c = node->children[i];
+        if (!c || c->type != SEXPR_LIST || c->num_children < 3) continue;
+        if (!c->children[0]->value || strcmp(c->children[0]->value, "pin") != 0) continue;
+
+        /* (pin "CAN_TX" input ...) */
+        if (out->num_pins >= pin_cap) {
+            pin_cap *= 2;
+            kicli_sheet_pin_t *tmp = realloc(out->pins, pin_cap * sizeof(kicli_sheet_pin_t));
+            if (!tmp) return -1;
+            out->pins = tmp;
+        }
+        kicli_sheet_pin_t *p = &out->pins[out->num_pins++];
+        memset(p, 0, sizeof(*p));
+        if (c->children[1]->value)
+            snprintf(p->name, sizeof(p->name), "%s", c->children[1]->value);
+        if (c->children[2]->value)
+            snprintf(p->direction, sizeof(p->direction), "%s", c->children[2]->value);
+    }
+    return 0;
+}
+
 /* ── Dynamic array helpers ────────────────────────────────────────────────── */
 
 #define GROW(arr, count, cap, type) do { \
@@ -319,16 +378,18 @@ kicli_err_t kicli_sch_read(const char *path, kicli_schematic_t **out)
 
     /* dynamic arrays */
     size_t sym_cap = 16, wire_cap = 16, junc_cap = 8;
-    size_t lbl_cap = 8, glbl_cap = 8;
+    size_t lbl_cap = 8, glbl_cap = 8, hlbl_cap = 8, sht_cap = 8;
 
     sch->symbols         = (kicli_symbol_t   *)malloc(sym_cap  * sizeof(kicli_symbol_t));
     sch->wires           = (kicli_wire_t     *)malloc(wire_cap * sizeof(kicli_wire_t));
     sch->junctions       = (kicli_junction_t *)malloc(junc_cap * sizeof(kicli_junction_t));
     sch->labels          = (kicli_label_t    *)malloc(lbl_cap  * sizeof(kicli_label_t));
     sch->global_labels   = (kicli_global_label_t *)malloc(glbl_cap * sizeof(kicli_global_label_t));
+    sch->hier_labels     = (kicli_hier_label_t *)malloc(hlbl_cap * sizeof(kicli_hier_label_t));
+    sch->sheets          = (kicli_sheet_t *)malloc(sht_cap * sizeof(kicli_sheet_t));
 
     if (!sch->symbols || !sch->wires || !sch->junctions ||
-        !sch->labels  || !sch->global_labels)
+        !sch->labels  || !sch->global_labels || !sch->hier_labels || !sch->sheets)
         goto oom;
 
     /* Walk root children */
@@ -353,6 +414,12 @@ kicli_err_t kicli_sch_read(const char *path, kicli_schematic_t **out)
         } else if (strcmp(tag, "global_label") == 0) {
             GROW(sch->global_labels, sch->num_global_labels, glbl_cap, kicli_global_label_t);
             parse_global_label(c, &sch->global_labels[sch->num_global_labels++]);
+        } else if (strcmp(tag, "hierarchical_label") == 0) {
+            GROW(sch->hier_labels, sch->num_hier_labels, hlbl_cap, kicli_hier_label_t);
+            parse_hier_label(c, &sch->hier_labels[sch->num_hier_labels++]);
+        } else if (strcmp(tag, "sheet") == 0) {
+            GROW(sch->sheets, sch->num_sheets, sht_cap, kicli_sheet_t);
+            parse_sheet(c, &sch->sheets[sch->num_sheets++]);
         }
     }
 
@@ -399,6 +466,10 @@ void kicli_sch_free(kicli_schematic_t *sch)
     free(sch->junctions);
     free(sch->labels);
     free(sch->global_labels);
+    free(sch->hier_labels);
+    for (size_t i = 0; i < sch->num_sheets; i++)
+        free(sch->sheets[i].pins);
+    free(sch->sheets);
     free(sch);
 }
 

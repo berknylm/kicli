@@ -176,6 +176,25 @@ static void comp_add_pin(dump_comp_t *c, const char *num, const char *name,
     p->uf_idx = -1;
 }
 
+/* ── Hierarchical sheet / label for dump ────────────────────────────────── */
+
+typedef struct {
+    char name[64];
+    char direction[16];
+} dump_sheet_pin_t;
+
+typedef struct {
+    char sheetname[128];
+    char sheetfile[256];
+    dump_sheet_pin_t *pins;
+    size_t num_pins;
+} dump_sheet_t;
+
+typedef struct {
+    char text[256];
+    char shape[64];
+} dump_hier_label_t;
+
 /* ── Net map: "REF:PIN" → net name (from kicad-cli netlist) ─────────────── */
 
 typedef struct {
@@ -351,10 +370,12 @@ typedef struct { double x1,y1,x2,y2; } wire_seg_t;
 /* ── Parse .kicad_sch ────────────────────────────────────────────────────── */
 
 static int parse_kicad_sch(const char *path,
-                            lib_sym_def_t **libs_out,   size_t *lib_count_out,
-                            placed_sym_t  **placed_out, size_t *placed_count_out,
-                            nc_pt_t       **nc_out,     size_t *nc_count_out,
-                            wire_seg_t    **wire_out,   size_t *wire_count_out)
+                            lib_sym_def_t  **libs_out,   size_t *lib_count_out,
+                            placed_sym_t   **placed_out, size_t *placed_count_out,
+                            nc_pt_t        **nc_out,     size_t *nc_count_out,
+                            wire_seg_t     **wire_out,   size_t *wire_count_out,
+                            dump_sheet_t   **sheets_out, size_t *sheet_count_out,
+                            dump_hier_label_t **hlbl_out, size_t *hlbl_count_out)
 {
     FILE *f = fopen(path, "rb");
     if (!f) { kicli_set_error("cannot open '%s'", path); return -1; }
@@ -371,10 +392,12 @@ static int parse_kicad_sch(const char *path,
     free(buf);
     if (!root) { kicli_set_error("sch parse: %s", errbuf); return -1; }
 
-    lib_sym_def_t *libs   = NULL; size_t lib_count = 0, lib_cap = 0;
-    placed_sym_t  *placed = NULL; size_t placed_count = 0, placed_cap = 0;
-    nc_pt_t       *nc_pts = NULL; size_t nc_count = 0, nc_cap = 0;
-    wire_seg_t    *wires  = NULL; size_t wire_count = 0, wire_cap = 0;
+    lib_sym_def_t     *libs   = NULL; size_t lib_count = 0, lib_cap = 0;
+    placed_sym_t      *placed = NULL; size_t placed_count = 0, placed_cap = 0;
+    nc_pt_t           *nc_pts = NULL; size_t nc_count = 0, nc_cap = 0;
+    wire_seg_t        *wires  = NULL; size_t wire_count = 0, wire_cap = 0;
+    dump_sheet_t      *sheets = NULL; size_t sheet_count = 0, sheet_cap = 0;
+    dump_hier_label_t *hlbls  = NULL; size_t hlbl_count = 0, hlbl_cap = 0;
 
     /* ── lib_symbols ─────────────────────────────────────────────────── */
     sexpr_t *lib_syms = sexpr_get(root, "lib_symbols");
@@ -514,6 +537,67 @@ static int parse_kicad_sch(const char *path,
                 ps->mirror_x = 1;
             ps->is_virtual = (ref[0] == '#' || strncmp(lid, "power:", 6) == 0);
         }
+
+        /* hierarchical_label */
+        if (strcmp(tag, "hierarchical_label") == 0) {
+            if (hlbl_count >= hlbl_cap) {
+                hlbl_cap = hlbl_cap ? hlbl_cap * 2 : 16;
+                dump_hier_label_t *tmp = realloc(hlbls, hlbl_cap * sizeof(dump_hier_label_t));
+                if (!tmp) goto oom;
+                hlbls = tmp;
+            }
+            dump_hier_label_t *h = &hlbls[hlbl_count++];
+            memset(h, 0, sizeof(*h));
+            if (c->num_children >= 2 && c->children[1]->value)
+                snprintf(h->text, sizeof(h->text), "%s", c->children[1]->value);
+            const char *shape = sexpr_atom_value(c, "shape");
+            if (shape) snprintf(h->shape, sizeof(h->shape), "%s", shape);
+        }
+
+        /* sheet */
+        if (strcmp(tag, "sheet") == 0) {
+            if (sheet_count >= sheet_cap) {
+                sheet_cap = sheet_cap ? sheet_cap * 2 : 8;
+                dump_sheet_t *tmp = realloc(sheets, sheet_cap * sizeof(dump_sheet_t));
+                if (!tmp) goto oom;
+                sheets = tmp;
+            }
+            dump_sheet_t *s = &sheets[sheet_count++];
+            memset(s, 0, sizeof(*s));
+
+            /* (property "Sheetname" "POWER") / (property "Sheetfile" "power.kicad_sch") */
+            for (size_t j = 0; j < c->num_children; j++) {
+                sexpr_t *prop = c->children[j];
+                if (!prop || prop->type != SEXPR_LIST || prop->num_children < 3) continue;
+                if (!prop->children[0]->value || strcmp(prop->children[0]->value, "property") != 0) continue;
+                if (!prop->children[1]->value || !prop->children[2]->value) continue;
+                if (strcmp(prop->children[1]->value, "Sheetname") == 0)
+                    snprintf(s->sheetname, sizeof(s->sheetname), "%s", prop->children[2]->value);
+                else if (strcmp(prop->children[1]->value, "Sheetfile") == 0)
+                    snprintf(s->sheetfile, sizeof(s->sheetfile), "%s", prop->children[2]->value);
+            }
+
+            /* sheet pins: (pin "CAN_TX" input ...) */
+            size_t pin_cap = 8;
+            s->pins = malloc(pin_cap * sizeof(dump_sheet_pin_t));
+            for (size_t j = 0; j < c->num_children; j++) {
+                sexpr_t *pin = c->children[j];
+                if (!pin || pin->type != SEXPR_LIST || pin->num_children < 3) continue;
+                if (!pin->children[0]->value || strcmp(pin->children[0]->value, "pin") != 0) continue;
+                if (s->num_pins >= pin_cap) {
+                    pin_cap *= 2;
+                    dump_sheet_pin_t *tmp = realloc(s->pins, pin_cap * sizeof(dump_sheet_pin_t));
+                    if (!tmp) continue;
+                    s->pins = tmp;
+                }
+                dump_sheet_pin_t *sp = &s->pins[s->num_pins++];
+                memset(sp, 0, sizeof(*sp));
+                if (pin->children[1]->value)
+                    snprintf(sp->name, sizeof(sp->name), "%s", pin->children[1]->value);
+                if (pin->children[2]->value)
+                    snprintf(sp->direction, sizeof(sp->direction), "%s", pin->children[2]->value);
+            }
+        }
     }
 
     sexpr_free(root);
@@ -521,12 +605,16 @@ static int parse_kicad_sch(const char *path,
     *placed_out       = placed; *placed_count_out = placed_count;
     *nc_out           = nc_pts; *nc_count_out     = nc_count;
     *wire_out         = wires;  *wire_count_out   = wire_count;
+    *sheets_out       = sheets; *sheet_count_out  = sheet_count;
+    *hlbl_out         = hlbls;  *hlbl_count_out   = hlbl_count;
     return 0;
 
 oom:
     sexpr_free(root);
     for (size_t i = 0; i < lib_count; i++) free(libs[i].pins);
+    for (size_t i = 0; i < sheet_count; i++) free(sheets[i].pins);
     free(libs); free(placed); free(nc_pts); free(wires);
+    free(sheets); free(hlbls);
     kicli_set_error("out of memory");
     return -1;
 }
@@ -542,7 +630,9 @@ static int placed_cmp(const void *a, const void *b)
 /* ── Write .kisch output ─────────────────────────────────────────────────── */
 
 static void write_kisch(FILE *f, const char *sch_path,
-                        const dump_comp_t *comps, size_t count)
+                        const dump_comp_t *comps, size_t count,
+                        const dump_sheet_t *sheets, size_t sheet_count,
+                        const dump_hier_label_t *hlbls, size_t hlbl_count)
 {
     size_t total_pins = 0;
     int w_refpin = 4, w_name = 4, w_type = 4;
@@ -598,6 +688,26 @@ static void write_kisch(FILE *f, const char *sch_path,
         }
         fprintf(f, "\n");
     }
+
+    /* ── Hierarchical labels (connections to parent sheet) ───────────── */
+    if (hlbl_count > 0) {
+        fprintf(f, "# Hierarchical labels\n");
+        for (size_t i = 0; i < hlbl_count; i++)
+            fprintf(f, "HLABEL  %-30s  %s\n", hlbls[i].text, short_type(hlbls[i].shape));
+        fprintf(f, "\n");
+    }
+
+    /* ── Sub-sheets and their pins ──────────────────────────────────── */
+    if (sheet_count > 0) {
+        fprintf(f, "# Sub-sheets\n");
+        for (size_t i = 0; i < sheet_count; i++) {
+            const dump_sheet_t *s = &sheets[i];
+            fprintf(f, "[SHEET: %s → %s]\n", s->sheetname, s->sheetfile);
+            for (size_t j = 0; j < s->num_pins; j++)
+                fprintf(f, "  %-30s  %s\n", s->pins[j].name, short_type(s->pins[j].direction));
+            fprintf(f, "\n");
+        }
+    }
 }
 
 /* ── Public: cmd_sch_dump ────────────────────────────────────────────────── */
@@ -612,16 +722,20 @@ int cmd_sch_dump(const char *sch_path, int argc, char **argv)
     }
 
     /* ── Pass 1: parse .kicad_sch ─────────────────────────────────────── */
-    lib_sym_def_t *libs   = NULL; size_t lib_count = 0;
-    placed_sym_t  *placed = NULL; size_t placed_count = 0;
-    nc_pt_t       *nc_pts = NULL; size_t nc_count = 0;
-    wire_seg_t    *wires  = NULL; size_t wire_count = 0;
+    lib_sym_def_t     *libs   = NULL; size_t lib_count = 0;
+    placed_sym_t      *placed = NULL; size_t placed_count = 0;
+    nc_pt_t           *nc_pts = NULL; size_t nc_count = 0;
+    wire_seg_t        *wires  = NULL; size_t wire_count = 0;
+    dump_sheet_t      *sheets = NULL; size_t sheet_count = 0;
+    dump_hier_label_t *hlbls  = NULL; size_t hlbl_count = 0;
 
     if (parse_kicad_sch(sch_path,
                         &libs, &lib_count,
                         &placed, &placed_count,
                         &nc_pts, &nc_count,
-                        &wires, &wire_count) != 0) {
+                        &wires, &wire_count,
+                        &sheets, &sheet_count,
+                        &hlbls, &hlbl_count) != 0) {
         fprintf(stderr, "error: %s\n", kicli_last_error());
         return 1;
     }
@@ -809,7 +923,7 @@ int cmd_sch_dump(const char *sch_path, int argc, char **argv)
         }
     }
 
-    write_kisch(f, sch_path, comps, comp_count);
+    write_kisch(f, sch_path, comps, comp_count, sheets, sheet_count, hlbls, hlbl_count);
 
     if (outfile) {
         fclose(f);
@@ -823,6 +937,8 @@ cleanup:
     net_map_free(&nmap);
     for (size_t i = 0; i < lib_count; i++) free(libs[i].pins);
     free(libs); free(placed); free(nc_pts); free(wires);
+    for (size_t i = 0; i < sheet_count; i++) free(sheets[i].pins);
+    free(sheets); free(hlbls);
     for (size_t i = 0; i < comp_count; i++) free(comps[i].pins);
     free(comps);
     return 0;
@@ -831,6 +947,8 @@ oom:
     net_map_free(&nmap);
     for (size_t i = 0; i < lib_count; i++) free(libs[i].pins);
     free(libs); free(placed); free(nc_pts); free(wires);
+    for (size_t i = 0; i < sheet_count; i++) free(sheets[i].pins);
+    free(sheets); free(hlbls);
     for (size_t i = 0; i < comp_count; i++) free(comps[i].pins);
     free(comps);
     kicli_set_error("out of memory");

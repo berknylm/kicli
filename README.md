@@ -1,258 +1,131 @@
 ## kicli
 
-`kicli` is a thin, pipe-friendly CLI wrapper around KiCad 10. It is designed for use by AI agents and automation scripts:
+Pipe-friendly CLI for KiCad 10. Designed for AI agents and automation.
 
 ```bash
-kicli sch board.kicad_sch list | grep "^U"       # all ICs
-kicli sch board.kicad_sch list | grep TPS        # find TPS parts
-kicli sch board.kicad_sch export pdf             # delegates to kicad-cli
-kicli fetch C2040                                 # fetch from LCSC
-kicli stock C2040 C14663                          # check stock & price
+kicli sch board.kicad_sch list              # list all components
+kicli sch board.kicad_sch list | grep "^U"  # find ICs
+kicli jlcpcb search "100nF 0402"            # search JLCPCB catalog
+kicli sch project/ set-all "100nF" LCSC C1525  # assign LCSC part numbers
+kicli jlcpcb bom board.kicad_sch            # export JLCPCB-ready BOM
 ```
-
-It finds `kicad-cli` automatically on any platform — no configuration needed.
 
 ---
 
-## Installation
+## Install
 
-### Download pre-built binary (recommended)
+**Build from source** (requires CMake 3.19+, C11 compiler, libcurl, Ninja):
 
-**macOS (Apple Silicon)**
 ```bash
-curl -L https://github.com/berknylm/kicli/releases/latest/download/kicli-macos-arm64.tar.gz | tar -xz
-sudo mv kicli /usr/local/bin/
+git clone https://github.com/berknylm/kicli.git && cd kicli
+cmake --preset release && cmake --build build/release
+sudo cmake --install build/release
 ```
 
-**macOS (Intel)**
-```bash
-curl -L https://github.com/berknylm/kicli/releases/latest/download/kicli-macos-x86_64.tar.gz | tar -xz
-sudo mv kicli /usr/local/bin/
-```
-
-**Linux**
-```bash
-curl -L https://github.com/berknylm/kicli/releases/latest/download/kicli-linux-x86_64.tar.gz | tar -xz
-sudo mv kicli /usr/local/bin/
-```
-
-**Windows** — download `kicli-windows-x86_64.zip` from the [latest release](https://github.com/berknylm/kicli/releases/latest), extract, and add the folder to your PATH.
+Pre-built binaries: [Releases](https://github.com/berknylm/kicli/releases/latest)
 
 > Requires **KiCad 10** — [kicad.org/download](https://www.kicad.org/download/)
 
 ---
 
-### Build from source
-
-#### Requirements
-
-- **KiCad 10** installed
-- **CMake 3.19+**
-- **A C11 compiler** (clang, gcc, or MSVC)
-- **libcurl** (pre-installed on macOS; `apt install libcurl4-openssl-dev` on Linux)
-- **Ninja** (`brew install ninja` / `choco install ninja`)
-
-#### macOS / Linux
-
-```bash
-git clone https://github.com/berknylm/kicli.git
-cd kicli
-cmake --preset release
-cmake --build build/release
-sudo cmake --install build/release
-```
-
-Or without sudo (installs to `~/.local/bin`):
-
-```bash
-cmake --install build/release --prefix ~/.local
-# Add ~/.local/bin to PATH if not already there
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-```
-
-### Windows
-
-Open **Developer Command Prompt** (or PowerShell with MSVC):
-
-```powershell
-git clone https://github.com/berknylm/kicli.git
-cd kicli
-cmake -B build/release -DCMAKE_BUILD_TYPE=Release
-cmake --build build/release --config Release
-cmake --install build/release
-```
-
-> **Note:** libcurl is required. Install via vcpkg: `vcpkg install curl:x64-windows` and add `-DCMAKE_TOOLCHAIN_FILE=...` to the cmake configure step.
-
-### Linux
-
-```bash
-# Install dependencies
-sudo apt install cmake ninja-build libcurl4-openssl-dev  # Debian/Ubuntu
-# or
-sudo dnf install cmake ninja-build libcurl-devel         # Fedora
-
-git clone https://github.com/berknylm/kicli.git
-cd kicli
-cmake --preset release
-cmake --build build/release
-sudo cmake --install build/release
-```
-
-### Verify
-
-```bash
-kicli kicad-path       # → /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli
-kicli kicad-version    # → 10.0.0
-kicli --version        # → kicli 0.1.0
-```
-
----
-
-## Quick start
-
-```bash
-# Create a new KiCad 10 project
-kicli new myboard
-
-# Open in KiCad
-kicad myboard/myboard.kicad_pro
-
-# Fetch a component from LCSC (e.g. 100nF 0402 cap)
-cd myboard
-kicli fetch C14663
-
-# Check stock
-kicli stock C14663
-
-# List all components in the schematic
-kicli sch myboard.kicad_sch list
-```
-
----
-
 ## Commands
 
-### `kicli new <name>`
-
-Create a new KiCad 10 project with a full local library structure.
-
-```
-myboard/
-  myboard.kicad_pro       KiCad project file
-  myboard.kicad_sch       Blank schematic
-  sym-lib-table           Symbol library → libs/symbols/
-  fp-lib-table            Footprint library → libs/footprints/
-  libs/symbols/
-  libs/footprints/myboard-footprints.pretty/
-  libs/3dmodels/
-  .kicli.toml             kicli project config
-```
-
-### `kicli kicad-path` / `kicli kicad-version`
-
-Show where `kicad-cli` was found and which KiCad version is installed.
-Override the auto-detected path with `KICAD_CLI_PATH` environment variable.
-
-### `kicli sch <file> <command>`
-
-| Command | Description |
-|---------|-------------|
-| `list` | One component per line: `REF VALUE LIB_ID` |
-| `info <ref>` | Detailed component info |
-| `nets` | All nets and connected pins |
-| `tree` | Schematic hierarchy |
-| `export <fmt>` | Export via kicad-cli (pdf/svg/netlist/bom) |
-| `erc` | Electrical rules check via kicad-cli |
-| `set <ref> <field> <val>` | Edit a field value |
-| `add <lib:sym>` | Add a component |
-| `remove <ref>` | Remove a component |
-
-### `kicli fetch <LCSC_ID>`
-
-Download and install a component from LCSC into the local library.
+### Project
 
 ```bash
-kicli fetch C2040              # fetch by LCSC ID
-kicli fetch search "USB-C"     # search
-kicli fetch list               # list fetched components
+kicli new myboard                    # create KiCad 10 project with local libs
+kicli config kicad-path              # show kicad-cli path
+kicli config kicad-path /usr/bin/kicad-cli  # set it manually
+kicli kicad-version                  # → 10.0.0
 ```
 
-### `kicli stock <part> [part...]`
-
-Real-time stock and pricing from LCSC, Digikey, and Mouser.
+### Schematic — Read
 
 ```bash
-kicli stock C2040 C14663
-kicli stock bom bom.csv
-kicli stock compare C2040
+kicli sch <file> list [--all]
+# R1        10k       Device:R        Resistor_SMD:R_0402_1005Metric
+# C1        100nF     Device:C        Capacitor_SMD:C_0402_1005Metric
+
+kicli sch <file> info R1
+# R1
+#   lib_id:     Device:R
+#   value:      10k
+#   footprint:  Resistor_SMD:R_0402_1005Metric
+#   in_bom:     yes
+#   ...
+
+kicli sch <file> nets         # all net labels
+kicli sch <file> stats        # component/wire/net counts
+kicli sch <file> dump [-o out.kisch]  # full pin+net table
+```
+
+### Schematic — Write
+
+```bash
+kicli sch <file> set <REF> <FIELD> <VALUE>
+# kicli sch board.kicad_sch set R1 LCSC C25744
+# → set R1.LCSC = C25744
+
+kicli sch <file|dir> set-all <VALUE_MATCH> <FIELD> <NEW_VALUE>
+# kicli sch project/ set-all "100nF" LCSC C1525
+# → sets LCSC=C1525 on all components with value "100nF"
+#   across every .kicad_sch file in the directory
+```
+
+### Schematic — Export (kicad-cli passthrough)
+
+```bash
+kicli sch <file> export pdf          # schematic PDF
+kicli sch <file> export svg          # schematic SVG
+kicli sch <file> export netlist      # netlist
+kicli sch <file> export bom          # KiCad BOM
+kicli sch <file> erc                 # electrical rules check
+```
+
+### JLCPCB
+
+```bash
+kicli jlcpcb part <LCSC_ID>
+# kicli jlcpcb part C2040
+# Brand:    Raspberry Pi
+# Model:    RP2040
+# Package:  LQFN-56(7x7)
+# Count:    127263
+# Price:    0.7079
+
+kicli jlcpcb search <query> [-n N]
+# kicli jlcpcb search "100nF 0402" -n 5
+# LCSC        Model                  Package   Stock
+# C1525       CL05B104KO5NNNC        0402      41526899
+# C1581       0402F104M500NT          0402      3373705
+# ...
+
+kicli jlcpcb bom <file> [-o out.csv]
+# kicli jlcpcb bom board.kicad_sch
+# Comment,Designator,Footprint,LCSC
+# 100nF,C1 C2 C3,Capacitor_SMD:C_0402_1005Metric,C1525
+# 10k,R1 R2,Resistor_SMD:R_0402_1005Metric,C25744
+```
+
+**Typical workflow** — assign LCSC part numbers to a project:
+
+```bash
+kicli jlcpcb bom board.kicad_sch            # see what's missing
+kicli jlcpcb search "100nF 0402"            # find the LCSC code
+kicli sch project/ set-all "100nF" LCSC C1525  # write it to all schematics
+kicli jlcpcb bom board.kicad_sch -o bom.csv # export final BOM for JLCPCB
 ```
 
 ---
 
 ## Configuration
 
-kicli loads config in this order (project overrides global):
-
-1. `~/.config/kicli/config.toml` — global
-2. `.kicli.toml` in the current directory — project
-
-```toml
-[project]
-kicad_version = "10"
-lib_dir = "libs"
-
-[fetch]
-default_source = "lcsc"
-auto_3d_models = true
-symbol_lib = "myboard-symbols"
-footprint_lib = "myboard-footprints"
-
-[stock]
-suppliers = ["lcsc", "digikey", "mouser"]
-currency = "USD"
-
-[stock.api_keys]
-lcsc = ""
-digikey = ""
-mouser = ""
-```
-
----
-
-## Environment variables
-
-| Variable | Description |
-|----------|-------------|
-| `KICAD_CLI_PATH` | Override kicad-cli path (e.g. for non-standard installs) |
-| `KICLI_LCSC_API_KEY` | LCSC API key |
-| `KICLI_DIGIKEY_API_KEY` | DigiKey API key |
-| `KICLI_MOUSER_API_KEY` | Mouser API key |
-
----
-
-## Building from source
-
 ```bash
-git clone https://github.com/berknylm/kicli.git
-cd kicli
-
-# Debug build
-cmake --preset debug
-cmake --build build/debug
-./build/debug/bin/kicli --version
-
-# Release build
-cmake --preset release
-cmake --build build/release
+~/.config/kicli/config.toml    # global (auto-created)
+.kicli.toml                    # project-level (created by kicli new)
 ```
 
-### CMake presets
-
-| Preset | Description |
-|--------|-------------|
-| `debug` | Debug build in `build/debug/` |
-| `release` | Optimized build in `build/release/` |
+Override kicad-cli path: `KICAD_CLI_PATH=/path/to/kicad-cli`
 
 ---
 

@@ -105,6 +105,28 @@ typedef struct { kicli_pt_t at; double diameter; } kicli_junction_t;
 typedef struct { char text[256]; kicli_pos_t at; } kicli_label_t;
 typedef struct { char text[256]; char shape[64]; kicli_pos_t at; } kicli_global_label_t;
 
+/* ── Hierarchical sheet ─────────────────────────────────────────────────── */
+
+typedef struct {
+    char name[64];      /* pin label (e.g. "CAN_TX") */
+    char direction[16]; /* input / output / bidirectional / passive */
+} kicli_sheet_pin_t;
+
+typedef struct {
+    char              sheetname[128];
+    char              sheetfile[256];
+    kicli_sheet_pin_t *pins;
+    size_t             num_pins;
+} kicli_sheet_t;
+
+/* ── Hierarchical label ─────────────────────────────────────────────────── */
+
+typedef struct {
+    char        text[256];
+    char        shape[64];   /* input / output / bidirectional / passive */
+    kicli_pos_t at;
+} kicli_hier_label_t;
+
 /* ── Title block ─────────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -133,6 +155,10 @@ typedef struct {
     size_t                num_labels;
     kicli_global_label_t *global_labels;
     size_t                num_global_labels;
+    kicli_hier_label_t   *hier_labels;
+    size_t                num_hier_labels;
+    kicli_sheet_t        *sheets;
+    size_t                num_sheets;
     bool                  has_title_block;
     kicli_title_block_t   title_block;
 } kicli_schematic_t;

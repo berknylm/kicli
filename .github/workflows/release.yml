@@ -165,6 +165,14 @@ jobs:
 
             **Windows** — download `kicli-windows-x86_64.zip`, extract `kicli.exe` and add the folder to your PATH.
 
+            ## Claude Code Setup
+
+            Add to your project's `CLAUDE.md`:
+            ```
+            kicli is installed at /usr/local/bin/kicli. Use it for all KiCad operations.
+            Run `kicli --help` for available commands.
+            ```
+
             ---
             Requires **KiCad 10** — [kicad.org/download](https://www.kicad.org/download/)
           files: |
