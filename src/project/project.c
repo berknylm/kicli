@@ -175,7 +175,7 @@ static int write_kicli_toml(const char *dir, const char *name) {
 /* ── cmd_new ─────────────────────────────────────────────────────────────── */
 
 int cmd_new(int argc, char **argv) {
-    if (argc < 2 || strcmp(argv[1], "--help") == 0) {
+    if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
         printf("Usage: kicli new <project-name> [directory]\n\n");
         printf("Creates a new KiCad 10 project:\n");
         printf("  <name>.kicad_pro    Project file\n");

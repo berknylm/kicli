@@ -258,23 +258,26 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
 {
     (void)cfg;
 
-    if (argc < 2 || strcmp(argv[1], "--help") == 0) {
-        printf("Usage: kicli sch <file> <command> [args]\n\n");
-        printf(CLR_BOLD "Read commands:\n" CLR_RESET);
-        printf("  list [--all]         List components (grep-friendly)\n");
-        printf("  info <REF>           Detailed component info\n");
-        printf("  nets                 List all net labels\n");
-        printf("  tree                 Schematic summary\n");
-        printf("  stats                Count summary\n");
-        printf("  dump [-o file.kisch] Export .kisch format (full pin+net table)\n");
-        printf("\n" CLR_BOLD "kicad-cli passthrough:\n" CLR_RESET);
-        printf("  export <fmt>         Export (pdf/svg/netlist/bom)\n");
-        printf("  erc                  Electrical rules check\n");
-        printf("  upgrade              Upgrade schematic format\n");
-        printf("\n" CLR_BOLD "Write (coming in M5):\n" CLR_RESET);
-        printf("  set <REF> <FIELD> <VALUE>\n");
-        printf("  add <LIB:SYM> --ref R5 --value 10k\n");
-        printf("  remove <REF>\n");
+    if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+        printf("Usage: kicli sch <file> <command> [args]\n");
+        printf("       kicli sch <dir>  set-all ...   (bulk operation across all .kicad_sch)\n\n");
+        printf(CLR_BOLD "Read:\n" CLR_RESET);
+        printf("  list [--all]           List components — tab-separated: REF VALUE LIB FOOTPRINT\n");
+        printf("                         --all includes power/virtual symbols (ref starts with #)\n");
+        printf("  info <REF>             All properties of a single component\n");
+        printf("  nets                   Local and global net labels\n");
+        printf("  tree                   Hierarchical schematic structure\n");
+        printf("  stats                  Component/wire/net/junction counts\n");
+        printf("  dump [-o file.kisch]   Full pin+net connectivity table (.kisch format)\n");
+        printf("\n" CLR_BOLD "Write:\n" CLR_RESET);
+        printf("  set <REF> <FIELD> <VALUE>           Set one component's property\n");
+        printf("    e.g. kicli sch board.kicad_sch set R1 LCSC C25744\n");
+        printf("  set-all <VALUE_MATCH> <FIELD> <NEW> Bulk-set field on all matching components\n");
+        printf("    e.g. kicli sch project/ set-all \"100nF\" LCSC C1525\n");
+        printf("\n" CLR_BOLD "Export (kicad-cli passthrough):\n" CLR_RESET);
+        printf("  export pdf|svg|netlist|bom [-o FILE]\n");
+        printf("  erc [-o FILE]          Electrical rules check\n");
+        printf("  upgrade                Upgrade schematic format\n");
         return 0;
     }
 

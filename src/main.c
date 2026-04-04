@@ -50,31 +50,55 @@ int cmd_sch   (int argc, char **argv, const kicli_config_t *cfg);
 /* ── Usage ──────────────────────────────────────────────────────────────── */
 
 static void print_usage(void) {
-    printf(CLR_BOLD "kicli" CLR_RESET " — agent-friendly KiCad CLI wrapper\n\n");
+    printf(CLR_BOLD "kicli" CLR_RESET " — pipe-friendly CLI for KiCad 10\n");
+    printf("Designed for AI agents and shell automation. All output is machine-parseable.\n\n");
     printf("Usage: kicli <command> [args]\n\n");
+
     printf(CLR_BOLD "Project:\n" CLR_RESET);
-    printf("  " CLR_CYAN "new <name>" CLR_RESET "                  Create a new KiCad 10 project\n");
+    printf("  " CLR_CYAN "new <name>" CLR_RESET "                    Create KiCad 10 project with local libs\n");
+
     printf("\n" CLR_BOLD "Configuration:\n" CLR_RESET);
-    printf("  " CLR_CYAN "config kicad-path" CLR_RESET "           Show kicad-cli path\n");
-    printf("  " CLR_CYAN "config kicad-path <path>" CLR_RESET "    Set kicad-cli path\n");
-    printf("\n" CLR_BOLD "KiCad info:\n" CLR_RESET);
-    printf("  " CLR_CYAN "kicad-path" CLR_RESET "                  Show path to kicad-cli\n");
-    printf("  " CLR_CYAN "kicad-version" CLR_RESET "               Show installed KiCad version\n");
-    printf("\n" CLR_BOLD "Schematic:\n" CLR_RESET);
-    printf("  " CLR_CYAN "sch <file> list" CLR_RESET "             List all components\n");
-    printf("  " CLR_CYAN "sch <file> info <ref>" CLR_RESET "       Show component details\n");
-    printf("  " CLR_CYAN "sch <file> nets" CLR_RESET "             List all nets\n");
-    printf("  " CLR_CYAN "sch <file> stats" CLR_RESET "            Count summary\n");
-    printf("  " CLR_CYAN "sch <file> dump [-o out.kisch]" CLR_RESET "  Full pin+net table (.kisch format)\n");
-    printf("  " CLR_CYAN "sch <file> export <fmt>" CLR_RESET "     Export via kicad-cli (pdf/svg/netlist/bom)\n");
-    printf("  " CLR_CYAN "sch <file> erc" CLR_RESET "              Electrical rules check\n");
-    printf("\n" CLR_BOLD "Components (coming soon):\n" CLR_RESET);
-    printf("  " CLR_CYAN "fetch <LCSC_ID>" CLR_RESET "             Fetch component from LCSC\n");
-    printf("  " CLR_CYAN "stock <part> [part...]" CLR_RESET "      Check stock and pricing\n");
+    printf("  " CLR_CYAN "config kicad-path" CLR_RESET "             Show current kicad-cli path\n");
+    printf("  " CLR_CYAN "config kicad-path <path>" CLR_RESET "      Set kicad-cli path manually\n");
+    printf("  " CLR_CYAN "kicad-path" CLR_RESET "                    Print resolved kicad-cli binary path\n");
+    printf("  " CLR_CYAN "kicad-version" CLR_RESET "                 Print KiCad version (e.g. 10.0.0)\n");
+
+    printf("\n" CLR_BOLD "Schematic — Read:\n" CLR_RESET);
+    printf("  " CLR_CYAN "sch <file> list [--all]" CLR_RESET "       List components (tab-separated: REF VALUE LIB FOOTPRINT)\n");
+    printf("  " CLR_CYAN "sch <file> info <REF>" CLR_RESET "         Show all properties of a component\n");
+    printf("  " CLR_CYAN "sch <file> nets" CLR_RESET "               List all local and global net labels\n");
+    printf("  " CLR_CYAN "sch <file> stats" CLR_RESET "              Component/wire/net/junction counts\n");
+    printf("  " CLR_CYAN "sch <file> dump [-o f.kisch]" CLR_RESET "  Full pin+net table in .kisch format\n");
+
+    printf("\n" CLR_BOLD "Schematic — Write:\n" CLR_RESET);
+    printf("  " CLR_CYAN "sch <file> set <REF> <FIELD> <VAL>" CLR_RESET "\n");
+    printf("                                    Set a property on one component\n");
+    printf("  " CLR_CYAN "sch <file|dir> set-all <VALUE_MATCH> <FIELD> <NEW_VAL>" CLR_RESET "\n");
+    printf("                                    Bulk-set a field on all components matching value\n");
+    printf("                                    If <dir>, applies across all .kicad_sch files\n");
+
+    printf("\n" CLR_BOLD "Schematic — Export (kicad-cli passthrough):\n" CLR_RESET);
+    printf("  " CLR_CYAN "sch <file> export pdf|svg|netlist|bom" CLR_RESET "\n");
+    printf("  " CLR_CYAN "sch <file> erc" CLR_RESET "                Electrical rules check\n");
+
     printf("\n" CLR_BOLD "JLCPCB:\n" CLR_RESET);
-    printf("  " CLR_CYAN "jlcpcb part <LCSC_ID>" CLR_RESET "      Get component detail from JLCPCB\n");
-    printf("  " CLR_CYAN "jlcpcb bom <sch> [-o out.csv]" CLR_RESET "  Generate JLCPCB BOM CSV\n");
-    printf("\nFor detailed KiCad operations: kicad-cli --help\n");
+    printf("  " CLR_CYAN "jlcpcb part <LCSC_ID>" CLR_RESET "        Lookup part detail (brand, model, stock, price)\n");
+    printf("  " CLR_CYAN "jlcpcb search <query> [-n N]" CLR_RESET "  Search JLCPCB catalog (type/description/stock)\n");
+    printf("  " CLR_CYAN "jlcpcb bom <sch> [-o out.csv]" CLR_RESET " Generate JLCPCB-ready BOM CSV\n");
+    printf("                                    Columns: Comment,Designator,Footprint,LCSC\n");
+    printf("                                    See Sample-BOM_JLCSMT.xlsx for JLCPCB format reference\n");
+
+    printf("\n" CLR_BOLD "Typical agent workflow — JLCPCB BOM:\n" CLR_RESET);
+    printf("  1. kicli sch board.kicad_sch list          # inspect components\n");
+    printf("  2. kicli jlcpcb bom board.kicad_sch        # check which LCSC codes are missing\n");
+    printf("  3. kicli jlcpcb search \"100nF 0402\"         # find LCSC part number\n");
+    printf("  4. kicli sch proj/ set-all \"100nF\" LCSC C1525  # assign to all matching\n");
+    printf("  5. kicli jlcpcb bom board.kicad_sch -o bom.csv # export final BOM\n");
+
+    printf("\nConfig: ~/.config/kicli/config.toml | .kicli.toml (project)\n");
+    printf("Env:    KICAD_CLI_PATH overrides kicad-cli location\n");
+    printf("\nRun " CLR_CYAN "kicli <command> --help" CLR_RESET " for detailed help on each subcommand:\n");
+    printf("  kicli sch --help       kicli jlcpcb --help       kicli config --help\n");
 }
 
 /* ── cmd_config ─────────────────────────────────────────────────────────── */
