@@ -60,7 +60,7 @@ static void print_usage(void) {
 
     printf("\nedit a schematic\n");
     printf("   set         Set a field on one component\n");
-    printf("   set-all     Bulk-set a field on all matching components\n");
+    printf("   set-all     Bulk-set with --footprint filter and --dry-run\n");
 
     printf("\nexport via kicad-cli\n");
     printf("   export      Export schematic as PDF, SVG, netlist, or BOM\n");
@@ -69,7 +69,7 @@ static void print_usage(void) {
     printf("\nJLCPCB component database\n");
     printf("   part        Lookup part detail, stock, price, datasheet URL\n");
     printf("   search      Search JLCPCB catalog (CSV output)\n");
-    printf("   bom         Generate JLCPCB-ready BOM from schematic\n");
+    printf("   bom         Generate JLCPCB-ready BOM (file or directory)\n");
 
     printf("\nproject\n");
     printf("   new         Create a new KiCad 10 project\n");

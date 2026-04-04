@@ -166,10 +166,28 @@ int cmd_sch_set(const char *sch_path, const char *ref, const char *field, const 
 
 /* ── cmd_sch_set_all ─────────────────────────────────────────────────────── */
 
-/* apply set-all to a single file: match by value, set field=new_val on all */
+/* simple glob: only supports * as wildcard */
+static int glob_match(const char *pattern, const char *str)
+{
+    while (*pattern) {
+        if (*pattern == '*') {
+            pattern++;
+            if (!*pattern) return 1;
+            for (; *str; str++)
+                if (glob_match(pattern, str)) return 1;
+            return 0;
+        }
+        if (*pattern != *str) return 0;
+        pattern++; str++;
+    }
+    return *str == '\0';
+}
+
+/* apply set-all to a single file: match by value (+optional footprint), set field=new_val */
 static int set_all_in_file(const char *sch_path,
-                           const char *val_match,
-                           const char *field, const char *new_val)
+                           const char *val_match, const char *fp_match,
+                           const char *field, const char *new_val,
+                           int dry_run)
 {
     char *buf = read_file(sch_path);
     if (!buf) return 0; /* skip unreadable files */
@@ -186,8 +204,8 @@ static int set_all_in_file(const char *sch_path,
         if (!c || c->type != SEXPR_LIST || c->num_children == 0) continue;
         if (!c->children[0]->value || strcmp(c->children[0]->value, "symbol") != 0) continue;
 
-        /* find Reference and Value properties */
-        const char *sym_ref = NULL, *sym_val = NULL;
+        /* find Reference, Value, Footprint properties */
+        const char *sym_ref = NULL, *sym_val = NULL, *sym_fp = NULL;
         for (size_t j = 1; j < c->num_children; j++) {
             sexpr_t *p = c->children[j];
             if (!p || p->type != SEXPR_LIST || p->num_children < 3) continue;
@@ -195,10 +213,18 @@ static int set_all_in_file(const char *sch_path,
             if (!p->children[1]->value || !p->children[2]->value) continue;
             if (strcmp(p->children[1]->value, "Reference") == 0) sym_ref = p->children[2]->value;
             if (strcmp(p->children[1]->value, "Value")     == 0) sym_val = p->children[2]->value;
+            if (strcmp(p->children[1]->value, "Footprint") == 0) sym_fp  = p->children[2]->value;
         }
 
         if (!sym_val || strcmp(sym_val, val_match) != 0) continue;
         if (!sym_ref || sym_ref[0] == '#') continue; /* skip power */
+        if (fp_match && !glob_match(fp_match, sym_fp ? sym_fp : "")) continue;
+
+        if (dry_run) {
+            printf("  %s  %s.%s = %s (dry-run)\n", sch_path, sym_ref, field, new_val);
+            changed++;
+            continue;
+        }
 
         sexpr_t *prop = find_property_node(c, field);
         if (prop) {
@@ -213,14 +239,34 @@ static int set_all_in_file(const char *sch_path,
         changed++;
     }
 
-    if (changed) sexpr_write_file(root, sch_path);
+    if (changed && !dry_run) sexpr_write_file(root, sch_path);
     sexpr_free(root);
     return changed;
 }
 
-int cmd_sch_set_all(const char *path,
-                    const char *val_match, const char *field, const char *new_val)
+int cmd_sch_set_all(const char *path, int argc, char **argv)
 {
+    /* parse: <VALUE_MATCH> <FIELD> <NEW_VALUE> [--footprint PAT] [--dry-run] */
+    if (argc < 3) {
+        fprintf(stderr, "Usage: kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW_VALUE>\n");
+        fprintf(stderr, "  --footprint <glob>   Only match components with this footprint\n");
+        fprintf(stderr, "  --dry-run            Preview changes without writing\n");
+        return 1;
+    }
+
+    const char *val_match = argv[0];
+    const char *field     = argv[1];
+    const char *new_val   = argv[2];
+    const char *fp_match  = NULL;
+    int dry_run = 0;
+
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--footprint") == 0 && i + 1 < argc)
+            fp_match = argv[++i];
+        else if (strcmp(argv[i], "--dry-run") == 0)
+            dry_run = 1;
+    }
+
     struct stat st;
     if (stat(path, &st) != 0) {
         fprintf(stderr, "error: cannot stat '%s': %s\n", path, strerror(errno));
@@ -243,7 +289,7 @@ int cmd_sch_set_all(const char *path,
         do {
             char fpath[1024];
             snprintf(fpath, sizeof(fpath), "%s\\%s", path, fd.cFileName);
-            total += set_all_in_file(fpath, val_match, field, new_val);
+            total += set_all_in_file(fpath, val_match, fp_match, field, new_val, dry_run);
         } while (FindNextFileA(hFind, &fd));
         FindClose(hFind);
 #else
@@ -255,16 +301,18 @@ int cmd_sch_set_all(const char *path,
             if (nl < 10 || strcmp(ent->d_name + nl - 10, ".kicad_sch") != 0) continue;
             char fpath[1024];
             snprintf(fpath, sizeof(fpath), "%s/%s", path, ent->d_name);
-            total += set_all_in_file(fpath, val_match, field, new_val);
+            total += set_all_in_file(fpath, val_match, fp_match, field, new_val, dry_run);
         }
         closedir(dir);
 #endif
     } else {
-        total = set_all_in_file(path, val_match, field, new_val);
+        total = set_all_in_file(path, val_match, fp_match, field, new_val, dry_run);
     }
 
     if (total == 0)
         printf("no components with value '%s' found\n", val_match);
+    else if (dry_run)
+        printf("%d component(s) would be updated\n", total);
     else
         printf("%d component(s) updated\n", total);
     return 0;

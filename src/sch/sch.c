@@ -14,7 +14,7 @@
 /* forward declarations */
 int cmd_sch_view   (const char *sch_path, int argc, char **argv);
 int cmd_sch_set    (const char *sch_path, const char *ref, const char *field, const char *value);
-int cmd_sch_set_all(const char *path, const char *val_match, const char *field, const char *new_val);
+int cmd_sch_set_all(const char *path, int argc, char **argv);
 
 #define CLR_RESET  "\x1b[0m"
 #define CLR_RED    "\x1b[31m"
@@ -28,6 +28,19 @@ static int is_virtual(const kicli_symbol_t *s)
            strncmp(s->lib_id, "power:", 6) == 0;
 }
 
+/* ── helpers ─────────────────────────────────────────────────────────────── */
+
+static const char *find_lcsc(const kicli_symbol_t *s)
+{
+    for (size_t i = 0; i < s->num_properties; i++) {
+        const char *k = s->properties[i].key;
+        if (strcmp(k, "LCSC") == 0 || strcmp(k, "lcsc") == 0 ||
+            strcmp(k, "JLC_PART") == 0 || strcmp(k, "JLCPCB#") == 0)
+            return s->properties[i].value ? s->properties[i].value : "";
+    }
+    return "";
+}
+
 /* ── list ────────────────────────────────────────────────────────────────── */
 
 static int cmd_sch_list(const kicli_schematic_t *sch, int show_all)
@@ -35,11 +48,13 @@ static int cmd_sch_list(const kicli_schematic_t *sch, int show_all)
     for (size_t i = 0; i < sch->num_symbols; i++) {
         const kicli_symbol_t *s = &sch->symbols[i];
         if (!show_all && is_virtual(s)) continue;
-        printf("%-8s  %-20s  %-40s  %s\n",
+        const char *lcsc = find_lcsc(s);
+        printf("%-8s  %-20s  %-40s  %-38s  %s\n",
                s->reference,
                s->value     ? s->value     : "",
                s->lib_id,
-               s->footprint ? s->footprint : "");
+               s->footprint ? s->footprint : "",
+               lcsc);
     }
     return 0;
 }
@@ -67,6 +82,9 @@ static int cmd_sch_info(const kicli_schematic_t *sch, const char *ref)
     printf("  on_board:   %s\n", s->on_board  ? "yes" : "no");
     printf("  position:   (%.3f, %.3f) angle=%.1f\n",
            s->at.x, s->at.y, s->at.angle);
+
+    const char *lcsc = find_lcsc(s);
+    printf("  PartNo:     %s\n", lcsc[0] ? lcsc : "(unset)");
 
     if (s->num_properties > 0) {
         printf("\n  Properties:\n");
@@ -160,15 +178,15 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
         printf("Usage: kicli sch <file> <command> [args]\n");
         printf("       kicli sch <dir>  set-all ...   (bulk across all .kicad_sch)\n");
         printf("\nRead:\n");
-        printf("  list [--all]           Tab-separated: REF VALUE LIB FOOTPRINT\n");
+        printf("  list [--all]           Tab-separated: REF VALUE LIB FOOTPRINT PartNo\n");
         printf("                         --all includes power/virtual symbols\n");
-        printf("  info <REF>             All properties of a component\n");
+        printf("  info <REF>             All properties + PartNo status\n");
         printf("  view [-o file.kisch]   Full pin+net connectivity table\n");
         printf("\nWrite:\n");
         printf("  set <REF> <FIELD> <VALUE>           Set one component's property\n");
         printf("    e.g. kicli sch board.kicad_sch set R1 LCSC C25744\n");
-        printf("  set-all <VALUE_MATCH> <FIELD> <NEW> Bulk-set field on all matching\n");
-        printf("    e.g. kicli sch project/ set-all \"100nF\" LCSC C1525\n");
+        printf("  set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--dry-run]\n");
+        printf("    e.g. kicli sch proj/ set-all \"LED\" LCSC C2286 --footprint \"*0603*\"\n");
         printf("\nExport (kicad-cli passthrough):\n");
         printf("  export pdf|svg|netlist|bom [-o FILE]\n");
         printf("  erc [-o FILE]          Electrical rules check\n");
@@ -198,12 +216,7 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
     }
 
     if (strcmp(subcmd, "set-all") == 0) {
-        if (argc < 6) {
-            fprintf(stderr, "Usage: kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW_VALUE>\n");
-            fprintf(stderr, "  If <dir>, applies to all .kicad_sch files in that directory\n");
-            return 1;
-        }
-        return cmd_sch_set_all(sch_path, argv[3], argv[4], argv[5]);
+        return cmd_sch_set_all(sch_path, argc - 3, argv + 3);
     }
 
     kicli_schematic_t *sch = NULL;

@@ -4,21 +4,24 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
 
 ## Commands
 
-  kicli sch <file> list [--all]     Tab-separated: REF VALUE LIB FOOTPRINT
-  kicli sch <file> info <REF>       All properties of a component
+  kicli sch <file> list [--all]     Tab-separated: REF VALUE LIB FOOTPRINT PartNo
+  kicli sch <file> info <REF>       All properties + PartNo status
   kicli sch <file> view             Pin+net connectivity (grep-friendly)
   kicli sch <file> set <REF> <FIELD> <VALUE>
-  kicli sch <dir>  set-all <VALUE_MATCH> <FIELD> <NEW_VALUE>
+  kicli sch <dir>  set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--dry-run]
   kicli sch <file> export pdf|svg|netlist|bom [-o FILE]
   kicli sch <file> erc [-o FILE]
   kicli jlcpcb part <LCSC_ID>       Detail, stock, price, datasheet URL
   kicli jlcpcb search <query> [-n N] [--basic|--extended] [--in-stock] [--package PKG]
-  kicli jlcpcb bom <file> [-o CSV]  JLCPCB-ready BOM (Comment,Designator,Footprint,LCSC)
+  kicli jlcpcb bom <file|dir> [-o CSV]  JLCPCB-ready BOM (merges all .kicad_sch in dir)
 
 ## Schematic recipes
 
   # find all ICs
   kicli sch board.kicad_sch list | grep '^U'
+
+  # components missing part numbers (5th column empty)
+  kicli sch board.kicad_sch list | awk '$5 == ""'
 
   # count components by prefix
   kicli sch board.kicad_sch list | cut -c1 | sort | uniq -c | sort -rn
@@ -40,36 +43,39 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
 
 ## BOM recipes
 
-  # generate BOM and see what's missing
-  kicli jlcpcb bom board.kicad_sch | grep ',$'
+  # generate BOM from all schematics in a project directory
+  kicli jlcpcb bom project/ | grep ',$'
 
-  # count how many BOM rows lack LCSC codes
-  kicli jlcpcb bom board.kicad_sch | grep -c ',$'
+  # count missing part numbers (summary also printed to stderr)
+  kicli jlcpcb bom board.kicad_sch 2>&1 >/dev/null
 
   # search for a part, prefer basic (no extra JLCPCB assembly fee)
   kicli jlcpcb search "100nF 0402" --basic --in-stock -n 5
 
-  # check part detail before assigning
+  # check part detail + datasheet before assigning
   kicli jlcpcb part C1525
 
-  # get datasheet URL for review
+  # get datasheet URL
   kicli jlcpcb part C89418 | grep Datasheet | cut -d' ' -f2
 
-  # assign LCSC code to one component
+  # assign part number to one component
   kicli sch board.kicad_sch set C1 LCSC C1525
 
-  # bulk-assign LCSC code to all components with same value
-  kicli sch project/ set-all "100nF" LCSC C1525
+  # bulk-assign with footprint filter (prevents wrong package assignment)
+  kicli sch project/ set-all "100nF" LCSC C1525 --footprint "*0402*"
 
-  # export final BOM for JLCPCB
-  kicli jlcpcb bom board.kicad_sch -o bom.csv
+  # preview bulk changes before writing
+  kicli sch project/ set-all "LED" LCSC C2286 --footprint "*0603*" --dry-run
 
-  # verify: all rows should now have LCSC codes
-  kicli jlcpcb bom board.kicad_sch | grep ',$' && echo "INCOMPLETE" || echo "READY"
+  # export final BOM
+  kicli jlcpcb bom project/ -o bom.csv
+
+  # verify completeness
+  kicli jlcpcb bom project/ | grep ',$' && echo "INCOMPLETE" || echo "READY"
 
 ## Schematic review workflow
 
-  1. kicli sch board.kicad_sch list              # inventory
+  1. kicli sch board.kicad_sch list              # inventory + PartNo status
   2. kicli sch board.kicad_sch view              # full connectivity
   3. view | grep '→ ~'                           # floating pins
   4. view | grep '^U1:' | grep 'pwrin'           # power pins per IC
@@ -78,14 +84,14 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
 
 ## BOM preparation workflow
 
-  1. kicli jlcpcb bom board.kicad_sch            # see empty LCSC rows
+  1. kicli jlcpcb bom project/                   # see empty PartNo rows + summary
   2. For each missing row:
      a. kicli jlcpcb search "<value> <package>" --basic --in-stock
      b. Pick part considering: voltage, temp, tolerance, circuit context
      c. kicli jlcpcb part <LCSC_ID>             # verify before assigning
-     d. kicli sch proj/ set-all "<value>" LCSC <code>
-  3. kicli jlcpcb bom board.kicad_sch            # confirm all filled
-  4. kicli jlcpcb bom board.kicad_sch -o bom.csv # export for JLCPCB upload
+     d. kicli sch proj/ set-all "<value>" LCSC <code> --footprint "*<pkg>*"
+  3. kicli jlcpcb bom project/                   # confirm all filled
+  4. kicli jlcpcb bom project/ -o bom.csv        # export for JLCPCB upload
 
 ## Reference
 

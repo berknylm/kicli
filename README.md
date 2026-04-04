@@ -35,7 +35,7 @@ schematics and component data.
 
 ```
 1. kicli sch board.kicad_sch list           → what's in the schematic
-2. kicli jlcpcb bom board.kicad_sch         → which parts are missing LCSC codes
+2. kicli jlcpcb bom board.kicad_sch         → which parts are missing part numbers
 3. kicli jlcpcb search "100nF 0402" --basic → find candidates
 4. Agent reads datasheet, picks the right part based on circuit context
 5. kicli sch proj/ set-all "100nF" LCSC C1525
@@ -78,8 +78,8 @@ kicli kicad-version                         # → 10.0.0
 
 ```bash
 kicli sch <file> list [--all]
-# REF       VALUE      LIB                FOOTPRINT
-# R1        10k        Device:R           Resistor_SMD:R_0402_1005Metric
+# REF       VALUE      LIB                FOOTPRINT                              PartNo
+# R1        10k        Device:R           Resistor_SMD:R_0402_1005Metric         C25744
 # C1        100nF      Device:C           Capacitor_SMD:C_0402_1005Metric
 # --all includes power symbols (#PWR, #FLG)
 
@@ -88,11 +88,7 @@ kicli sch <file> info <REF>
 #   lib_id:     Device:R
 #   value:      10k
 #   footprint:  Resistor_SMD:R_0402_1005Metric
-#   position:   (100.000, 50.000) angle=0.0
-#   Properties:
-#     Reference  R1
-#     Value      10k
-#     LCSC       C25744
+#   PartNo:     C25744            ← shows "(unset)" when missing
 
 kicli sch <file> view [-o out.kisch]
 # Full pin+net connectivity table
@@ -116,10 +112,10 @@ kicli sch <file> set <REF> <FIELD> <VALUE>
 # kicli sch board.kicad_sch set R1 LCSC C25744
 # → set R1.LCSC = C25744
 
-kicli sch <file|dir> set-all <VALUE_MATCH> <FIELD> <NEW_VALUE>
-# kicli sch project/ set-all "100nF" LCSC C1525
-# → sets LCSC=C1525 on every component with value "100nF"
-#   across all .kicad_sch files in the directory
+kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--dry-run]
+# kicli sch project/ set-all "100nF" LCSC C1525 --footprint "*0402*"
+# → sets PartNo=C1525 only on 100nF caps with 0402 footprint
+# --dry-run previews changes without writing
 ```
 
 ### Schematic — Export (kicad-cli passthrough)
@@ -157,12 +153,12 @@ kicli jlcpcb search <query> [options]
 # Output: CSV (LCSC,Type,Model,Package,Stock,Price,Description)
 # Type: base = basic (no extra fee), expand = extended
 
-kicli jlcpcb bom <file> [-o out.csv]
-# Generates JLCPCB-ready BOM CSV from schematic
+kicli jlcpcb bom <file|dir> [-o out.csv]
+# Accepts file or directory (merges all .kicad_sch for hierarchical designs)
 # Comment,Designator,Footprint,LCSC
 # 100nF,"C1 C2 C3",Capacitor_SMD:C_0402_1005Metric,C1525
 # 10k,"R1 R2",Resistor_SMD:R_0402_1005Metric,C25744
-# Empty LCSC column = part number not yet assigned
+# stderr: "12 row(s), 3 missing PartNo"
 ```
 
 ---

@@ -3,8 +3,16 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include <errno.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #  define strcasecmp _stricmp
+#  include <windows.h>
+#  ifndef S_ISDIR
+#    define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#  endif
+#else
+#  include <dirent.h>
 #endif
 #include <curl/curl.h>
 #include "kicli/jlcpcb.h"
@@ -291,37 +299,27 @@ static const char *find_lcsc(const kicli_symbol_t *s)
     return "";
 }
 
-static int jlcpcb_bom(const char *sch_path, const char *out_path)
+/* write BOM rows from a flat symbol array, grouping by value+footprint */
+static void bom_write_symbols(FILE *f, const kicli_symbol_t *syms, size_t count,
+                              int *total_rows, int *missing_lcsc)
 {
-    kicli_schematic_t *sch = NULL;
-    if (kicli_sch_read(sch_path, &sch) != KICLI_OK) {
-        fprintf(stderr, "error: %s\n", kicli_last_error());
-        return 1;
-    }
+    int *seen = calloc(count, sizeof(int));
+    if (!seen) return;
 
-    FILE *f = out_path ? fopen(out_path, "w") : stdout;
-    if (!f) { fprintf(stderr, "error: cannot open %s\n", out_path); kicli_sch_free(sch); return 1; }
-
-    fprintf(f, "Comment,Designator,Footprint,LCSC\n");
-
-    /* visited flags for grouping */
-    int *seen = calloc(sch->num_symbols, sizeof(int));
-
-    for (size_t i = 0; i < sch->num_symbols; i++) {
-        const kicli_symbol_t *a = &sch->symbols[i];
+    for (size_t i = 0; i < count; i++) {
+        const kicli_symbol_t *a = &syms[i];
         if (seen[i] || !a->in_bom || a->reference[0] == '#') continue;
 
         const char *lcsc_a = find_lcsc(a);
         const char *fp_a   = a->footprint ? a->footprint : "";
         const char *val_a  = a->value     ? a->value     : "";
 
-        /* collect matching designators */
         char desig[4096] = "";
         strncat(desig, a->reference, sizeof(desig) - 1);
         seen[i] = 1;
 
-        for (size_t j = i + 1; j < sch->num_symbols; j++) {
-            const kicli_symbol_t *b = &sch->symbols[j];
+        for (size_t j = i + 1; j < count; j++) {
+            const kicli_symbol_t *b = &syms[j];
             if (seen[j] || !b->in_bom || b->reference[0] == '#') continue;
             const char *val_b = b->value     ? b->value     : "";
             const char *fp_b  = b->footprint ? b->footprint : "";
@@ -335,11 +333,120 @@ static int jlcpcb_bom(const char *sch_path, const char *out_path)
         csv_field(f, desig);  fputc(',', f);
         csv_field(f, fp_a);   fputc(',', f);
         csv_field(f, lcsc_a); fputc('\n', f);
+        (*total_rows)++;
+        if (!lcsc_a[0]) (*missing_lcsc)++;
     }
 
     free(seen);
+}
+
+/* load one .kicad_sch, append its symbols to a growing array */
+static int bom_load_file(const char *path,
+                         kicli_symbol_t **all, size_t *count, size_t *cap,
+                         kicli_schematic_t ***to_free, size_t *free_count, size_t *free_cap)
+{
+    kicli_schematic_t *sch = NULL;
+    if (kicli_sch_read(path, &sch) != KICLI_OK) {
+        fprintf(stderr, "warning: %s: %s (skipped)\n", path, kicli_last_error());
+        return 0;
+    }
+
+    /* keep sch alive so symbol pointers remain valid */
+    if (*free_count >= *free_cap) {
+        *free_cap = *free_cap ? *free_cap * 2 : 8;
+        kicli_schematic_t **tmp = realloc(*to_free, *free_cap * sizeof(kicli_schematic_t *));
+        if (!tmp) { kicli_sch_free(sch); return 0; }
+        *to_free = tmp;
+    }
+    (*to_free)[(*free_count)++] = sch;
+
+    for (size_t i = 0; i < sch->num_symbols; i++) {
+        if (*count >= *cap) {
+            *cap = *cap ? *cap * 2 : 256;
+            kicli_symbol_t *tmp = realloc(*all, *cap * sizeof(kicli_symbol_t));
+            if (!tmp) return 0;
+            *all = tmp;
+        }
+        (*all)[(*count)++] = sch->symbols[i];
+    }
+    return 0;
+}
+
+static int jlcpcb_bom(const char *path, const char *out_path)
+{
+    kicli_symbol_t *all = NULL;
+    size_t count = 0, cap = 0;
+    kicli_schematic_t **to_free = NULL;
+    size_t free_count = 0, free_cap = 0;
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        fprintf(stderr, "error: cannot stat '%s': %s\n", path, strerror(errno));
+        return 1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        /* scan directory for *.kicad_sch */
+#ifdef _WIN32
+        char pattern[1024];
+        snprintf(pattern, sizeof(pattern), "%s\\*.kicad_sch", path);
+        WIN32_FIND_DATAA fd;
+        HANDLE hFind = FindFirstFileA(pattern, &fd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                char fpath[1024];
+                snprintf(fpath, sizeof(fpath), "%s\\%s", path, fd.cFileName);
+                bom_load_file(fpath, &all, &count, &cap, &to_free, &free_count, &free_cap);
+            } while (FindNextFileA(hFind, &fd));
+            FindClose(hFind);
+        }
+#else
+        DIR *dir = opendir(path);
+        if (!dir) { fprintf(stderr, "error: cannot open dir '%s'\n", path); return 1; }
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            size_t nl = strlen(ent->d_name);
+            if (nl < 10 || strcmp(ent->d_name + nl - 10, ".kicad_sch") != 0) continue;
+            char fpath[1024];
+            snprintf(fpath, sizeof(fpath), "%s/%s", path, ent->d_name);
+            bom_load_file(fpath, &all, &count, &cap, &to_free, &free_count, &free_cap);
+        }
+        closedir(dir);
+#endif
+    } else {
+        bom_load_file(path, &all, &count, &cap, &to_free, &free_count, &free_cap);
+    }
+
+    if (count == 0) {
+        fprintf(stderr, "error: no BOM components found\n");
+        free(all);
+        for (size_t i = 0; i < free_count; i++) kicli_sch_free(to_free[i]);
+        free(to_free);
+        return 1;
+    }
+
+    FILE *f = out_path ? fopen(out_path, "w") : stdout;
+    if (!f) {
+        fprintf(stderr, "error: cannot open %s\n", out_path);
+        free(all);
+        for (size_t i = 0; i < free_count; i++) kicli_sch_free(to_free[i]);
+        free(to_free);
+        return 1;
+    }
+
+    fprintf(f, "Comment,Designator,Footprint,LCSC\n");
+
+    int total_rows = 0, missing_lcsc = 0;
+    bom_write_symbols(f, all, count, &total_rows, &missing_lcsc);
+
     if (out_path) fclose(f);
-    kicli_sch_free(sch);
+    free(all);
+    for (size_t i = 0; i < free_count; i++) kicli_sch_free(to_free[i]);
+    free(to_free);
+
+    if (total_rows > 0)
+        fprintf(stderr, "%d row(s), %d missing PartNo\n", total_rows, missing_lcsc);
+
     return 0;
 }
 
@@ -360,19 +467,18 @@ int cmd_jlcpcb(int argc, char **argv)
         printf("    --package <PKG>            Filter by package (e.g. 0402, 0603, LQFP-48)\n");
         printf("                               Output: LCSC, Type, Model, Package, Stock, Description\n");
         printf("                               Type: base = basic part (no extra fee), expand = extended\n");
-        printf("  bom    <sch> [-o out.csv]    Generate JLCPCB-ready BOM CSV from schematic\n");
+        printf("  bom    <sch|dir> [-o out.csv] Generate JLCPCB-ready BOM CSV\n");
+        printf("                               Accepts file or directory (merges all .kicad_sch)\n");
         printf("                               Columns: Comment,Designator,Footprint,LCSC\n");
-        printf("                               Groups identical components (same value+footprint)\n");
-        printf("                               Empty LCSC column = part number not yet assigned\n");
-        printf("                               See Sample-BOM_JLCSMT.xlsx for JLCPCB expected format\n");
+        printf("                               Groups by value+footprint, shows missing PartNo count\n");
         printf("\nExamples:\n");
         printf("  kicli jlcpcb part C2040\n");
         printf("  kicli jlcpcb search \"100nF 0402\"\n");
         printf("  kicli jlcpcb search \"100nF\" --basic --in-stock --package 0402\n");
         printf("  kicli jlcpcb search \"RP2040\" --in-stock -n 5\n");
         printf("  kicli jlcpcb bom board.kicad_sch -o bom.csv\n");
-        printf("\nWorkflow — assign missing LCSC part numbers:\n");
-        printf("  1. kicli jlcpcb bom board.kicad_sch           # find rows with empty LCSC\n");
+        printf("\nWorkflow — assign missing part numbers:\n");
+        printf("  1. kicli jlcpcb bom board.kicad_sch           # find rows with empty PartNo\n");
         printf("  2. kicli jlcpcb search \"<value> <package>\"     # find LCSC code\n");
         printf("  3. kicli sch board.kicad_sch set C1 LCSC C1525 # assign to one component\n");
         printf("     or: kicli sch proj/ set-all \"100nF\" LCSC C1525  # bulk assign by value\n");
@@ -399,7 +505,7 @@ int cmd_jlcpcb(int argc, char **argv)
     }
 
     if (strcmp(argv[1], "bom") == 0) {
-        if (argc < 3) { fprintf(stderr, "Usage: kicli jlcpcb bom <sch_file> [-o out.csv]\n"); return 1; }
+        if (argc < 3) { fprintf(stderr, "Usage: kicli jlcpcb bom <sch|dir> [-o out.csv]\n"); return 1; }
         const char *out = NULL;
         for (int i = 3; i < argc - 1; i++)
             if (strcmp(argv[i], "-o") == 0) out = argv[i + 1];

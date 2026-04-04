@@ -28,18 +28,19 @@ Binary: `build/{debug,release}/bin/kicli`
 ## Commands (current state)
 
 ### Implemented
-- `sch list [--all]` — tab-separated component list
-- `sch info <REF>` — all properties + position
+- `sch list [--all]` — tab-separated: REF VALUE LIB FOOTPRINT PartNo
+- `sch info <REF>` — all properties + position + PartNo status (shows "(unset)")
 - `sch view [-o file]` — full pin+net connectivity table (grep-friendly)
 - `sch set <REF> <FIELD> <VALUE>` — edit one component property
-- `sch set-all <VALUE_MATCH> <FIELD> <NEW>` — bulk edit across directory
+- `sch set-all <VALUE> <FIELD> <NEW> [--footprint glob] [--dry-run]` — bulk edit with footprint filter
 - `sch export pdf|svg|netlist|bom [-o]` — kicad-cli passthrough
 - `sch erc [-o]` — kicad-cli passthrough
-- `jlcpcb part <LCSC_ID>` — brand, model, package, stock, price, datasheet URL
+- `jlcpcb part <LCSC_ID>` �� brand, model, package, stock, price, datasheet URL
 - `jlcpcb search <query>` — CSV output with filters: -n, --basic, --extended, --in-stock, --package
-- `jlcpcb bom <sch> [-o csv]` — JLCPCB-ready BOM from schematic
+- `jlcpcb bom <file|dir> [-o csv]` — JLCPCB-ready BOM, merges all .kicad_sch in directory, shows missing count
 - `new <name>` — create KiCad 10 project
 - `config kicad-path [path]` / `kicad-path` / `kicad-version`
+- `skills` — print SKILLS.md agent guide (embedded in binary)
 
 ### Agent guide
 - `SKILLS.md` — comprehensive agent skill document with piping recipes and workflows
