@@ -16,6 +16,9 @@
 #include <sys/stat.h>
 #ifdef _WIN32
 #  include <windows.h>
+#  ifndef S_ISDIR
+#    define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#  endif
 #else
 #  include <dirent.h>
 #endif
