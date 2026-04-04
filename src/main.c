@@ -18,6 +18,7 @@
 #include "kicli/config.h"
 #include "kicli/error.h"
 #include "kicli/kicad_cli.h"
+#include "kicli/jlcpcb.h"
 
 /* ── VT color support on Windows 10+ ───────────────────────────────────── */
 #ifdef _WIN32
@@ -40,10 +41,11 @@ static void enable_vt_colors(void) {}
 
 /* ── Forward declarations ───────────────────────────────────────────────── */
 
-int cmd_new  (int argc, char **argv);
-int cmd_fetch(int argc, char **argv);
-int cmd_stock(int argc, char **argv);
-int cmd_sch  (int argc, char **argv, const kicli_config_t *cfg);
+int cmd_new   (int argc, char **argv);
+int cmd_fetch (int argc, char **argv);
+int cmd_stock (int argc, char **argv);
+int cmd_jlcpcb(int argc, char **argv);
+int cmd_sch   (int argc, char **argv, const kicli_config_t *cfg);
 
 /* ── Usage ──────────────────────────────────────────────────────────────── */
 
@@ -69,6 +71,8 @@ static void print_usage(void) {
     printf("\n" CLR_BOLD "Components (coming soon):\n" CLR_RESET);
     printf("  " CLR_CYAN "fetch <LCSC_ID>" CLR_RESET "             Fetch component from LCSC\n");
     printf("  " CLR_CYAN "stock <part> [part...]" CLR_RESET "      Check stock and pricing\n");
+    printf("\n" CLR_BOLD "JLCPCB:\n" CLR_RESET);
+    printf("  " CLR_CYAN "jlcpcb part <LCSC_ID>" CLR_RESET "      Get component detail from JLCPCB\n");
     printf("\nFor detailed KiCad operations: kicad-cli --help\n");
 }
 
@@ -130,6 +134,7 @@ int main(int argc, char *argv[]) {
     if (strcmp(cmd, "new")          == 0) return cmd_new       (argc - 1, argv + 1);
     if (strcmp(cmd, "fetch")        == 0) return cmd_fetch     (argc - 1, argv + 1);
     if (strcmp(cmd, "stock")        == 0) return cmd_stock     (argc - 1, argv + 1);
+    if (strcmp(cmd, "jlcpcb")       == 0) return cmd_jlcpcb    (argc - 1, argv + 1);
 
     if (strcmp(cmd, "kicad-path") == 0) {
         char path[KICAD_CLI_MAX_PATH];

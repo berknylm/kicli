@@ -26,6 +26,7 @@ file(GLOB_RECURSE KICLI_SOURCES
     src/sch/*.c
     src/sch/parser/*.c
     src/sch/ops/*.c
+    src/jlcpcb/*.c
 )
 
 add_executable(kicli ${KICLI_SOURCES})
