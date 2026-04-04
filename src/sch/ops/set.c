@@ -14,7 +14,11 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
-#include <dirent.h>
+#ifdef _WIN32
+#  include <windows.h>
+#else
+#  include <dirent.h>
+#endif
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -216,6 +220,22 @@ int cmd_sch_set_all(const char *path,
 
     if (S_ISDIR(st.st_mode)) {
         /* scan directory for *.kicad_sch */
+#ifdef _WIN32
+        char pattern[1024];
+        snprintf(pattern, sizeof(pattern), "%s\\*.kicad_sch", path);
+        WIN32_FIND_DATAA fd;
+        HANDLE hFind = FindFirstFileA(pattern, &fd);
+        if (hFind == INVALID_HANDLE_VALUE) {
+            fprintf(stderr, "error: cannot open dir '%s'\n", path);
+            return 1;
+        }
+        do {
+            char fpath[1024];
+            snprintf(fpath, sizeof(fpath), "%s\\%s", path, fd.cFileName);
+            total += set_all_in_file(fpath, val_match, field, new_val);
+        } while (FindNextFileA(hFind, &fd));
+        FindClose(hFind);
+#else
         DIR *dir = opendir(path);
         if (!dir) { fprintf(stderr, "error: cannot open dir '%s'\n", path); return 1; }
         struct dirent *ent;
@@ -227,6 +247,7 @@ int cmd_sch_set_all(const char *path,
             total += set_all_in_file(fpath, val_match, field, new_val);
         }
         closedir(dir);
+#endif
     } else {
         total = set_all_in_file(path, val_match, field, new_val);
     }

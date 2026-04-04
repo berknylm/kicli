@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+#  define strcasecmp _stricmp
+#endif
 #include <curl/curl.h>
 #include "kicli/jlcpcb.h"
 #include "kicli/sch.h"
