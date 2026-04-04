@@ -459,8 +459,8 @@ static int parse_kicad_sch(const char *path,
                 if (!tmp) goto oom;
                 nc_pts = tmp;
             }
-            nc_pts[nc_count].x = atof(at->children[1]->value);
-            nc_pts[nc_count].y = atof(at->children[2]->value);
+            nc_pts[nc_count].x = at->children[1]->value ? atof(at->children[1]->value) : 0;
+            nc_pts[nc_count].y = at->children[2]->value ? atof(at->children[2]->value) : 0;
             nc_count++;
             continue;
         }
@@ -476,8 +476,8 @@ static int parse_kicad_sch(const char *path,
                 if (!xy || xy->type != SEXPR_LIST || xy->num_children < 3) continue;
                 if (!xy->children[0]->value ||
                     strcmp(xy->children[0]->value, "xy") != 0) continue;
-                xs[found] = atof(xy->children[1]->value);
-                ys[found] = atof(xy->children[2]->value);
+                xs[found] = xy->children[1]->value ? atof(xy->children[1]->value) : 0;
+                ys[found] = xy->children[2]->value ? atof(xy->children[2]->value) : 0;
                 found++;
             }
             if (found < 2) continue;
@@ -526,8 +526,8 @@ static int parse_kicad_sch(const char *path,
             snprintf(ps->lib_id, sizeof(ps->lib_id), "%s", lid);
             sexpr_t *at = sexpr_get(c, "at");
             if (at && at->num_children >= 3) {
-                ps->at_x  = atof(at->children[1]->value);
-                ps->at_y  = atof(at->children[2]->value);
+                ps->at_x  = at->children[1]->value ? atof(at->children[1]->value) : 0;
+                ps->at_y  = at->children[2]->value ? atof(at->children[2]->value) : 0;
                 ps->angle = at->num_children >= 4 && at->children[3]->value
                             ? atof(at->children[3]->value) : 0;
             }

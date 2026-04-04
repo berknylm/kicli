@@ -140,8 +140,14 @@ int cmd_sch_set(const char *sch_path, const char *ref, const char *field, const 
     sexpr_t *prop = find_property_node(sym, field);
     if (prop) {
         /* update existing value in place */
+        char *newval = strdup(value);
+        if (!newval) {
+            fprintf(stderr, "error: out of memory\n");
+            sexpr_free(root);
+            return 1;
+        }
         free(prop->children[2]->value);
-        prop->children[2]->value = strdup(value);
+        prop->children[2]->value = newval;
     } else {
         /* add new property node */
         sexpr_list_append(sym, make_property_node(field, value));
@@ -196,8 +202,10 @@ static int set_all_in_file(const char *sch_path,
 
         sexpr_t *prop = find_property_node(c, field);
         if (prop) {
+            char *newval = strdup(new_val);
+            if (!newval) { sexpr_free(root); return 0; }
             free(prop->children[2]->value);
-            prop->children[2]->value = strdup(new_val);
+            prop->children[2]->value = newval;
         } else {
             sexpr_list_append(c, make_property_node(field, new_val));
         }

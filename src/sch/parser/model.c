@@ -273,8 +273,8 @@ static int parse_hier_label(const sexpr_t *node, kicli_hier_label_t *out)
     if (shape) snprintf(out->shape, sizeof(out->shape), "%s", shape);
     sexpr_t *at = sexpr_get(node, "at");
     if (at && at->num_children >= 3) {
-        out->at.x = atof(at->children[1]->value);
-        out->at.y = atof(at->children[2]->value);
+        out->at.x = at->children[1]->value ? atof(at->children[1]->value) : 0;
+        out->at.y = at->children[2]->value ? atof(at->children[2]->value) : 0;
     }
     return 0;
 }
