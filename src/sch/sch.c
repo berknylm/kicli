@@ -15,8 +15,10 @@
 #include "kicli/config.h"
 #include "kicli/kicad_cli.h"
 
-/* forward declaration — implemented in dump.c */
-int cmd_sch_dump(const char *sch_path, int argc, char **argv);
+/* forward declarations */
+int cmd_sch_dump   (const char *sch_path, int argc, char **argv);
+int cmd_sch_set    (const char *sch_path, const char *ref, const char *field, const char *value);
+int cmd_sch_set_all(const char *path, const char *val_match, const char *field, const char *new_val);
 
 #define CLR_RESET  "\x1b[0m"
 #define CLR_BOLD   "\x1b[1m"
@@ -293,10 +295,30 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
     if (strcmp(subcmd, "upgrade") == 0) return cmd_sch_upgrade(sch_path);
     if (strcmp(subcmd, "dump")    == 0) return cmd_sch_dump(sch_path, argc - 3, argv + 3);
 
+    /* set <ref> <field> <value> */
+    if (strcmp(subcmd, "set") == 0) {
+        if (argc < 6) {
+            fprintf(stderr, "Usage: kicli sch <file> set <REF> <FIELD> <VALUE>\n");
+            return 1;
+        }
+        return cmd_sch_set(sch_path, argv[3], argv[4], argv[5]);
+    }
+
+    /* set-all <value_match> <field> <new_value>  — works on file or directory */
+    if (strcmp(subcmd, "set-all") == 0) {
+        if (argc < 6) {
+            fprintf(stderr, "Usage: kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW_VALUE>\n");
+            fprintf(stderr, "  Sets FIELD=NEW_VALUE on all components with matching VALUE\n");
+            fprintf(stderr, "  If <dir>, applies to all .kicad_sch files in that directory\n");
+            return 1;
+        }
+        return cmd_sch_set_all(sch_path, argv[3], argv[4], argv[5]);
+    }
+
     /* M5 stubs */
-    if (strcmp(subcmd, "set") == 0 || strcmp(subcmd, "add") == 0 ||
-        strcmp(subcmd, "remove") == 0 || strcmp(subcmd, "move") == 0 ||
-        strcmp(subcmd, "connect") == 0 || strcmp(subcmd, "rename") == 0) {
+    if (strcmp(subcmd, "add") == 0 || strcmp(subcmd, "remove") == 0 ||
+        strcmp(subcmd, "move") == 0 || strcmp(subcmd, "connect") == 0 ||
+        strcmp(subcmd, "rename") == 0) {
         fprintf(stderr, CLR_YELLOW "not yet implemented:" CLR_RESET
                 " sch write commands coming in M5\n");
         return 1;

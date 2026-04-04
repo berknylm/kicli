@@ -73,6 +73,7 @@ static void print_usage(void) {
     printf("  " CLR_CYAN "stock <part> [part...]" CLR_RESET "      Check stock and pricing\n");
     printf("\n" CLR_BOLD "JLCPCB:\n" CLR_RESET);
     printf("  " CLR_CYAN "jlcpcb part <LCSC_ID>" CLR_RESET "      Get component detail from JLCPCB\n");
+    printf("  " CLR_CYAN "jlcpcb bom <sch> [-o out.csv]" CLR_RESET "  Generate JLCPCB BOM CSV\n");
     printf("\nFor detailed KiCad operations: kicad-cli --help\n");
 }
 
