@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(kicli VERSION 0.4.0 LANGUAGES C)
+project(kicli VERSION 0.5.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -39,6 +39,7 @@ file(GLOB_RECURSE KICLI_SOURCES
     src/sch/parser/*.c
     src/sch/ops/*.c
     src/jlcpcb/*.c
+    src/import/*.c
 )
 
 add_executable(kicli ${KICLI_SOURCES} "${SKILLS_HEADER}")

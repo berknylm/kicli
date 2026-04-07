@@ -19,6 +19,7 @@
 #include "kicli/error.h"
 #include "kicli/kicad_cli.h"
 #include "kicli/jlcpcb.h"
+#include "kicli/import.h"
 #include "skills_md.h"
 
 /* ── VT color support on Windows 10+ ───────────────────────────────────── */
@@ -71,12 +72,16 @@ static void print_usage(void) {
     printf("   search      Search JLCPCB catalog (CSV output)\n");
     printf("   bom         Generate JLCPCB-ready BOM (file or directory)\n");
 
+    printf("\ncomponent libraries\n");
+    printf("   import      Import vendor ZIP (SnapEDA, Ultra Librarian, CSE)\n");
+
     printf("\nproject\n");
     printf("   new         Create a new KiCad 10 project\n");
     printf("   config      Show or set kicad-cli path\n");
     printf("   skills      Print agent skill guide (SKILLS.md)\n");
 
-    printf("\n'kicli sch --help' and 'kicli jlcpcb --help' for full syntax.\n");
+    printf("\n'kicli sch --help', 'kicli jlcpcb --help', 'kicli import --help'\n");
+    printf("for full syntax.\n");
 }
 
 /* ── cmd_config ─────────────────────────────────────────────────────────── */
@@ -125,7 +130,7 @@ int main(int argc, char *argv[]) {
     const char *cmd = argv[1];
 
     if (strcmp(cmd, "--version") == 0 || strcmp(cmd, "-V") == 0) {
-        printf("kicli 0.4.0\n");
+        printf("kicli 0.5.0\n");
         return 0;
     }
     if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
@@ -143,6 +148,7 @@ int main(int argc, char *argv[]) {
     if (strcmp(cmd, "fetch")        == 0) return cmd_fetch     (argc - 1, argv + 1);
     if (strcmp(cmd, "stock")        == 0) return cmd_stock     (argc - 1, argv + 1);
     if (strcmp(cmd, "jlcpcb")       == 0) return cmd_jlcpcb    (argc - 1, argv + 1);
+    if (strcmp(cmd, "import")       == 0) return cmd_import    (argc - 1, argv + 1);
 
     if (strcmp(cmd, "kicad-path") == 0) {
         char path[KICAD_CLI_MAX_PATH];

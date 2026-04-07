@@ -21,6 +21,7 @@ Binary: `build/{debug,release}/bin/kicli`
 - `src/jlcpcb/jlcpcb.c` — jlcpcb part/search/bom (JLCPCB API via libcurl)
 - `src/kicad/` — kicad-cli wrapper (export, erc, netlist)
 - `src/project/project.c` — kicli new (project scaffolding)
+- `src/import/import.c` — vendor ZIP import (SnapEDA, Ultra Librarian, CSE)
 - `src/fetch/fetch.c` — stub, functionality covered by jlcpcb part
 - `src/stock/stock.c` — stub, functionality covered by jlcpcb part (Count field)
 - `include/kicli/` — public headers
@@ -38,6 +39,8 @@ Binary: `build/{debug,release}/bin/kicli`
 - `jlcpcb part <LCSC_ID>` �� brand, model, package, stock, price, datasheet URL
 - `jlcpcb search <query>` — CSV output with filters: -n, --basic, --extended, --in-stock, --package
 - `jlcpcb bom <file|dir> [-o csv]` — JLCPCB-ready BOM, merges all .kicad_sch in directory, shows missing count
+- `import <file.zip> [-l lib] [--project dir]` — import vendor ZIP (symbol + footprint + 3D model)
+- `import --list` — list imported libraries
 - `new <name>` — create KiCad 10 project
 - `config kicad-path [path]` / `kicad-path` / `kicad-version`
 - `skills` — print SKILLS.md agent guide (embedded in binary)

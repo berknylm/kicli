@@ -14,6 +14,8 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
   kicli jlcpcb part <LCSC_ID>       Detail, stock, price, datasheet URL
   kicli jlcpcb search <query> [-n N] [--basic|--extended] [--in-stock] [--package PKG]
   kicli jlcpcb bom <file|dir> [-o CSV]  JLCPCB-ready BOM (merges all .kicad_sch in dir)
+  kicli import <file.zip> [-l LIB] [--project DIR]   Import vendor ZIP (symbol+footprint+3D)
+  kicli import --list [--project DIR]                 List imported libraries
 
 ## Schematic recipes
 
@@ -92,6 +94,25 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
      d. kicli sch proj/ set-all "<value>" LCSC <code> --footprint "*<pkg>*"
   3. kicli jlcpcb bom project/                   # confirm all filled
   4. kicli jlcpcb bom project/ -o bom.csv        # export for JLCPCB upload
+
+## Component library import workflow
+
+  # import vendor ZIP (SnapEDA, Ultra Librarian, CSE) into project
+  kicli import ~/Downloads/LM358.zip -l op_amps
+
+  # import from Ultra Librarian (ul_ prefix auto-stripped)
+  kicli import ~/Downloads/ul_RP2040.zip -l microcontrollers
+
+  # import from CSE (LIB_ prefix auto-stripped)
+  kicli import ~/Downloads/LIB_PESD_0402.zip
+
+  # auto-derived library name (from zip filename)
+  kicli import ~/Downloads/LM358.zip
+
+  # list all imported libraries
+  kicli import --list
+
+  # after import: symbol available as op_amps:LM358 in KiCad
 
 ## Reference
 
