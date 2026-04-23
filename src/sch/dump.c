@@ -15,7 +15,8 @@
  *     • pins in netmap  → use netmap label
  *     • pins at NC pos  → "NC"
  *     • pins connected by wire but unlabeled → "REF:PIN, REF2:PIN2, ..."
- *     • pins with no wire → "~"
+ *     • pins with no wire → "~" in the NET column
+ *     • pins with no name (unnamed, e.g. on passives) → "-" in the NAME column
  *
  * grep patterns:
  *   grep '^Y1:'       all Y1 pins
@@ -159,7 +160,13 @@ static void comp_add_pin(dump_comp_t *c, const char *num, const char *name,
     dump_pin_t *p = &c->pins[c->num_pins++];
     memset(p, 0, sizeof(*p));
     snprintf(p->num,  sizeof(p->num),  "%s", num  ? num  : "?");
-    snprintf(p->name, sizeof(p->name), "%s", name ? name : "~");
+    /* KiCad stores unnamed pins as literal "~" in the library source.
+     * Normalize that to empty here — the NAME column renders empty as "-"
+     * at print time, and we reserve "~" to mean "floating net" in the NET
+     * column only. */
+    const char *nm = (name && name[0]) ? name : "";
+    if (strcmp(nm, "~") == 0) nm = "";
+    snprintf(p->name, sizeof(p->name), "%s", nm);
     snprintf(p->type, sizeof(p->type), "%s", type ? type : "");
     p->ax = ax;
     p->ay = ay;
@@ -304,7 +311,9 @@ static void lib_sym_add_pin(lib_sym_def_t *s, const char *num,
     }
     lib_pin_def_t *p = &s->pins[s->num_pins++];
     snprintf(p->num,  sizeof(p->num),  "%s", num  ? num  : "?");
-    snprintf(p->name, sizeof(p->name), "%s", name ? name : "~");
+    const char *nm = (name && name[0]) ? name : "";
+    if (strcmp(nm, "~") == 0) nm = "";  /* KiCad placeholder for unnamed */
+    snprintf(p->name, sizeof(p->name), "%s", nm);
     snprintf(p->type, sizeof(p->type), "%s", type ? type : "");
     p->at_x = at_x;
     p->at_y = at_y;
@@ -656,7 +665,7 @@ static void write_kisch(FILE *f, const char *sch_path,
     fprintf(f, "# %s  (%zu components, %zu pins)\n",
             fname ? fname + 1 : sch_path, count, total_pins);
     fprintf(f, "# REF:PIN  NAME  TYPE  → NET\n");
-    fprintf(f, "# NC=no-connect marker  ~=floating  unlabeled shown as peer list\n");
+    fprintf(f, "# NC=no-connect marker  ~=floating net  -=unnamed pin  unlabeled nets shown as peer list\n");
     fprintf(f, "\n");
 
     for (size_t i = 0; i < count; i++) {
@@ -680,7 +689,7 @@ static void write_kisch(FILE *f, const char *sch_path,
                 snprintf(refpin, sizeof(refpin), "%s:%s", c->ref, p->num);
                 fprintf(f, "%-*s  %-*s  %-*s  → %s\n",
                         w_refpin, refpin,
-                        w_name,   p->name,
+                        w_name,   p->name[0] ? p->name : "-",
                         w_type,   short_type(p->type),
                         p->net);
             }
@@ -945,7 +954,7 @@ static int view_render(const char *sch_path, FILE *fp_out,
                 const dump_pin_t *p = &comps[i].pins[j];
                 fprintf(fp_out, "%-8s\t%-24s\t%-8s\t%s\n",
                         p->num,
-                        p->name[0] ? p->name : "~",
+                        p->name[0] ? p->name : "-",
                         short_type(p->type),
                         p->net);
             }
@@ -974,13 +983,13 @@ static int view_render(const char *sch_path, FILE *fp_out,
                 if (sheet_label && sheet_label[0])
                     fprintf(fp_out, "%-24s\t%-24s\t%-8s\t%s\n",
                             refpin,
-                            p->name[0] ? p->name : "~",
+                            p->name[0] ? p->name : "-",
                             short_type(p->type),
                             sheet_label);
                 else
                     fprintf(fp_out, "%-24s\t%-24s\t%s\n",
                             refpin,
-                            p->name[0] ? p->name : "~",
+                            p->name[0] ? p->name : "-",
                             short_type(p->type));
             }
         }

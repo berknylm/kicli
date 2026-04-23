@@ -165,7 +165,10 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
 ## Reference
 
   Pin types: in, out, inout, pass, pwrin, pwrout, tri, oc, oe, free, nc
-  Net symbols: ~ = floating (no wire), NC = intentional no-connect
+  NAME column: "-" = unnamed pin (e.g. passives)     (was "~" pre-v0.7.1)
+  NET  column: "~" = floating net (no wire connected)
+               "NC" = intentional no-connect marker
+               "name1:pin1, ..." = unlabeled wire cluster (peer list)
   PartNo column: "(unset)" when the LCSC/PartNo field is missing
   JLCPCB types: base = basic (no extra fee), expand = extended
   Directory arg on list / view / info / set-all / jlcpcb bom walks every .kicad_sch
