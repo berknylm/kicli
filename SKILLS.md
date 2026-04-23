@@ -37,6 +37,19 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
   kicli jlcpcb part <LCSC_ID>       Detail, stock, price, datasheet URL
   kicli jlcpcb search <query> [-n N] [--basic|--extended] [--in-stock] [--package PKG]
   kicli jlcpcb bom <file|dir> [-o CSV]  JLCPCB-ready BOM (merges all .kicad_sch in dir)
+  kicli jlcpcb check <file|dir> [-o F] [--json]
+                                        Side-by-side cross-check per component.
+                                        Tab cols: REF PartNo SchValue
+                                                   JLCPCBBrand JLCPCBModel
+                                                   SchFootprint JLCPCBPackage
+                                                   Stock Match
+                                        Match ∈ {yes, NO, ?} is a SUBSTRING
+                                        HEURISTIC: treat Match=NO as "needs
+                                        review", NOT as a verdict. Agent must
+                                        verify BGA pitch, exposed-pad (-EP)
+                                        variants, imperial/metric 0402 vs 0402,
+                                        and vendor naming (SMD3225-4P vs
+                                        Crystal_SMD_3225-4Pin) independently.
   kicli import <file.zip> [-l LIB] [--project DIR]   Import vendor ZIP (symbol+footprint+3D)
   kicli import --list [--project DIR]                 List imported libraries
 
@@ -135,6 +148,12 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
 ## BOM preparation workflow
 
   1. kicli jlcpcb bom project/                   # see empty PartNo rows + summary
+  1b. kicli jlcpcb check project/                # after any LCSC assignment, cross-
+                                                 # check vs JLCPCB API. Read BOTH
+                                                 # SchValue vs JLCPCBModel AND
+                                                 # SchFootprint vs JLCPCBPackage.
+                                                 # Match=NO is a hint; agent
+                                                 # confirms before acting.
   2. For each missing row:
      a. kicli jlcpcb search "<value> <package>" --basic --in-stock
      b. Pick part considering: voltage, temp, tolerance, circuit context

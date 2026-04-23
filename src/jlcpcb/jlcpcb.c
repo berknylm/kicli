@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <errno.h>
 
 #include <curl/curl.h>
@@ -363,6 +364,317 @@ static int bom_load_file(const char *path,
     return 0;
 }
 
+/* ── check: SchFootprint × JLCPCBPackage side-by-side ────────────────────── */
+/*
+ * Outputs two things the agent couldn't otherwise correlate in one shot:
+ *   1. What the schematic says (value, footprint) per component
+ *   2. What JLCPCB says about the same LCSC part (brand, model, package, stock)
+ * plus a crude substring-based Match flag.
+ *
+ *   IMPORTANT — the Match column is a HEURISTIC, not a verdict.
+ *   "Match=yes" only means the JLCPCB package string appears as a substring
+ *   of the KiCad footprint string (case-insensitive). It will miss:
+ *     - imperial vs metric 0402 collisions
+ *     - exposed-pad (-EP) variants with mismatched thermal pads
+ *     - BGA pitch differences
+ *     - vendor-specific tantalum/electrolytic case codes
+ *   Agents must independently verify any row before assuming correctness,
+ *   especially for BGAs, power parts, and mechanicals.
+ */
+
+/* Extract a single JSON field (string or bare number) from the flat JLCPCB
+ * JSON response. Returns 1 on success, 0 if the key was not present. */
+static int extract_json_field(const char *json, const char *key,
+                               char *out, size_t outsz)
+{
+    if (outsz == 0) return 0;
+    out[0] = '\0';
+    if (!json || !key) return 0;
+
+    char needle[128];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char *f = strstr(json, needle);
+    if (!f) return 0;
+
+    const char *colon = strchr(f, ':');
+    if (!colon) return 0;
+    const char *p = colon + 1;
+
+    while (*p == ' ' || *p == '\t') p++;
+    int in_str = 0;
+    if (*p == '"') { in_str = 1; p++; }
+
+    const char *start = p;
+    while (*p) {
+        if (in_str) {
+            if (*p == '\\' && p[1]) { p += 2; continue; }
+            if (*p == '"') break;
+        } else {
+            if (*p == ',' || *p == '}' || *p == ']' || *p == '\n') break;
+        }
+        p++;
+    }
+    size_t len = (size_t)(p - start);
+    if (len >= outsz) len = outsz - 1;
+    memcpy(out, start, len);
+    out[len] = '\0';
+
+    /* trim trailing whitespace on bare numbers */
+    while (len > 0 && (out[len-1] == ' ' || out[len-1] == '\t')) out[--len] = '\0';
+    return 1;
+}
+
+typedef struct {
+    char  lcsc[32];
+    char  brand[128];
+    char  model[128];
+    char  package[128];
+    char  stock[32];     /* kept as string: API may return "0" or absent */
+    int   api_ok;        /* 1 if HTTP 200 + parsed, 0 if network/parse fail */
+} check_entry_t;
+
+/* Single blocking API call for one LCSC. Populates `e`. Returns 0 on success
+ * even if some fields are missing (so the row is still printed), nonzero on
+ * total failure (network, alloc). */
+static int fetch_part_detail(const char *lcsc, check_entry_t *e)
+{
+    memset(e, 0, sizeof(*e));
+    snprintf(e->lcsc, sizeof(e->lcsc), "%s", lcsc ? lcsc : "");
+
+    if (!lcsc || !lcsc[0]) return 0;
+
+    CURL *curl = curl_easy_init();
+    if (!curl) { kicli_set_error("curl init failed"); return 1; }
+
+    char url[256];
+    snprintf(url, sizeof(url),
+        "https://cart.jlcpcb.com/shoppingCart/smtGood/getComponentDetail"
+        "?componentCode=%s", lcsc);
+
+    buf_t buf = {0};
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "kicli/check");
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK || !buf.data) {
+        free(buf.data);
+        /* Non-fatal: row will render with API fields as "-" */
+        return 0;
+    }
+
+    /* Empty or error responses from JLCPCB are short and don't contain the
+     * fields below; extract_json_field silently leaves them empty. */
+    extract_json_field(buf.data, "componentBrandEn",        e->brand,   sizeof(e->brand));
+    extract_json_field(buf.data, "componentModelEn",        e->model,   sizeof(e->model));
+    extract_json_field(buf.data, "componentSpecificationEn",e->package, sizeof(e->package));
+    extract_json_field(buf.data, "overseasStockCount",      e->stock,   sizeof(e->stock));
+
+    /* Heuristic: API "ok" means we got at least one of the identifying fields. */
+    if (e->brand[0] || e->model[0] || e->package[0]) e->api_ok = 1;
+
+    free(buf.data);
+    return 0;
+}
+
+/* Case-insensitive substring test. */
+static int istrstr(const char *haystack, const char *needle)
+{
+    if (!haystack || !needle || !*needle) return 0;
+    size_t nlen = strlen(needle);
+    for (const char *h = haystack; *h; h++) {
+        size_t i;
+        for (i = 0; i < nlen; i++) {
+            if (!h[i]) return 0;
+            if (tolower((unsigned char)h[i]) != tolower((unsigned char)needle[i])) break;
+        }
+        if (i == nlen) return 1;
+    }
+    return 0;
+}
+
+/* Three-valued match classifier.
+ *   yes = JLCPCBPackage is a case-insensitive substring of SchFootprint
+ *   NO  = both present but no substring match
+ *   ?   = can't decide (missing data) */
+static const char *match_flag(const char *sch_fp, const char *jlc_pkg)
+{
+    if (!sch_fp || !*sch_fp) return "?";
+    if (!jlc_pkg || !*jlc_pkg) return "?";
+    return istrstr(sch_fp, jlc_pkg) ? "yes" : "NO";
+}
+
+/* Look up or fill cache entry for a given LCSC. Returns pointer into cache. */
+static check_entry_t *cache_lookup(check_entry_t *cache, size_t *count, size_t *cap,
+                                    const char *lcsc)
+{
+    if (!lcsc || !lcsc[0]) return NULL;
+    for (size_t i = 0; i < *count; i++) {
+        if (strcmp(cache[i].lcsc, lcsc) == 0) return &cache[i];
+    }
+    if (*count >= *cap) return NULL;  /* caller handles grow */
+    check_entry_t *e = &cache[(*count)++];
+    fetch_part_detail(lcsc, e);
+    return e;
+}
+
+/* JSON escape: rewrite s into out with backslash-quoted quotes/backslashes. */
+static void json_escape(const char *s, char *out, size_t outsz)
+{
+    size_t o = 0;
+    if (!s) s = "";
+    while (*s && o + 2 < outsz) {
+        unsigned char c = (unsigned char)*s++;
+        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = c; }
+        else if (c < 0x20)         { o += (size_t)snprintf(out + o, outsz - o, "\\u%04x", c); }
+        else                        { out[o++] = c; }
+    }
+    if (o < outsz) out[o] = '\0'; else out[outsz-1] = '\0';
+}
+
+static int jlcpcb_check(const char *path, const char *out_path, int as_json)
+{
+    kicli_symbol_t *all = NULL;
+    size_t count = 0, cap = 0;
+    kicli_schematic_t **to_free = NULL;
+    size_t free_count = 0, free_cap = 0;
+
+    if (!kicli_exists(path)) {
+        fprintf(stderr, "error: cannot stat '%s': %s\n", path, strerror(errno));
+        return 3;
+    }
+
+    if (kicli_is_dir(path)) {
+        kicli_dir_t *dir = kicli_opendir(path);
+        if (!dir) { fprintf(stderr, "error: cannot open dir '%s'\n", path); return 3; }
+        const char *name;
+        while ((name = kicli_readdir(dir)) != NULL) {
+            size_t nl = strlen(name);
+            if (nl < 10 || strcmp(name + nl - 10, ".kicad_sch") != 0) continue;
+            char fpath[1024];
+            snprintf(fpath, sizeof(fpath), "%s%c%s", path, KICLI_PATH_SEP, name);
+            bom_load_file(fpath, &all, &count, &cap, &to_free, &free_count, &free_cap);
+        }
+        kicli_closedir(dir);
+    } else {
+        bom_load_file(path, &all, &count, &cap, &to_free, &free_count, &free_cap);
+    }
+
+    if (count == 0) {
+        fprintf(stderr, "error: no components found\n");
+        free(all);
+        for (size_t i = 0; i < free_count; i++) kicli_sch_free(to_free[i]);
+        free(to_free);
+        return 2;
+    }
+
+    /* Cache API results per unique LCSC. Upper bound is count (1:1). */
+    check_entry_t *cache = calloc(count, sizeof(check_entry_t));
+    size_t cache_count = 0;
+    size_t cache_cap = count;
+    if (!cache) {
+        fprintf(stderr, "error: out of memory\n");
+        free(all);
+        for (size_t i = 0; i < free_count; i++) kicli_sch_free(to_free[i]);
+        free(to_free);
+        return 1;
+    }
+
+    FILE *f = out_path ? fopen(out_path, "w") : stdout;
+    if (!f) {
+        fprintf(stderr, "error: cannot open '%s': %s\n", out_path, strerror(errno));
+        free(cache); free(all);
+        for (size_t i = 0; i < free_count; i++) kicli_sch_free(to_free[i]);
+        free(to_free);
+        return 3;
+    }
+
+    if (as_json) {
+        fprintf(f, "[");
+    } else {
+        fprintf(f, "# Match column is a SUBSTRING HEURISTIC — agent must verify before trusting.\n");
+        fprintf(f, "# yes = JLCPCBPackage is a substring of SchFootprint (case-insensitive).\n");
+        fprintf(f, "# NO  = both present but no substring match — likely bug, confirm.\n");
+        fprintf(f, "# ?   = cannot decide (missing PartNo, API failed, unknown package).\n");
+        fprintf(f, "REF\tPartNo\tSchValue\tJLCPCBBrand\tJLCPCBModel\tSchFootprint\tJLCPCBPackage\tStock\tMatch\n");
+    }
+
+    int row_first = 1;
+    int any_no = 0, any_zero_stock = 0, any_unset = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        const kicli_symbol_t *s = &all[i];
+        if (!s->in_bom || s->reference[0] == '#') continue;
+
+        const char *lcsc  = find_lcsc(s);
+        const char *value = s->value     ? s->value     : "";
+        const char *sch_fp= s->footprint ? s->footprint : "";
+
+        check_entry_t *entry = NULL;
+        if (lcsc && lcsc[0]) {
+            entry = cache_lookup(cache, &cache_count, &cache_cap, lcsc);
+        }
+
+        const char *brand   = (entry && entry->brand[0])   ? entry->brand   : "-";
+        const char *model   = (entry && entry->model[0])   ? entry->model   : "-";
+        const char *jlc_pkg = (entry && entry->package[0]) ? entry->package : "-";
+        const char *stock   = (entry && entry->stock[0])   ? entry->stock   : "-";
+        const char *partno  = (lcsc && lcsc[0])             ? lcsc           : "(unset)";
+
+        /* Compute Match on actual strings (not the "-" fallback). */
+        const char *flag = (!lcsc || !lcsc[0])
+            ? "?"
+            : match_flag(sch_fp, entry ? entry->package : NULL);
+
+        if (!lcsc || !lcsc[0])               any_unset++;
+        if (strcmp(flag, "NO") == 0)          any_no++;
+        if (entry && strcmp(entry->stock, "0") == 0) any_zero_stock++;
+
+        if (as_json) {
+            if (!row_first) fputc(',', f);
+            row_first = 0;
+
+            char eb[256], em[256], ev[256], ef[512], ep[256];
+            json_escape(brand,   eb, sizeof(eb));
+            json_escape(model,   em, sizeof(em));
+            json_escape(value,   ev, sizeof(ev));
+            json_escape(sch_fp,  ef, sizeof(ef));
+            json_escape(jlc_pkg, ep, sizeof(ep));
+            fprintf(f,
+                "{\"ref\":\"%s\",\"partNo\":\"%s\",\"schValue\":\"%s\","
+                "\"jlcpcbBrand\":\"%s\",\"jlcpcbModel\":\"%s\","
+                "\"schFootprint\":\"%s\",\"jlcpcbPackage\":\"%s\","
+                "\"stock\":\"%s\",\"match\":\"%s\"}",
+                s->reference, partno, ev, eb, em, ef, ep, stock, flag);
+        } else {
+            fprintf(f, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+                    s->reference, partno, value,
+                    brand, model, sch_fp, jlc_pkg, stock, flag);
+        }
+    }
+
+    if (as_json) fputc(']', f);
+    fputc('\n', f);
+
+    if (out_path && f != stdout) fclose(f);
+
+    if (!as_json) {
+        fprintf(stderr,
+            "# summary: %d NO (footprint mismatch?), %d zero-stock, %d unset PartNo\n",
+            any_no, any_zero_stock, any_unset);
+        fprintf(stderr, "# (agent: verify every NO row independently — heuristic is lossy.)\n");
+    }
+
+    free(cache); free(all);
+    for (size_t i = 0; i < free_count; i++) kicli_sch_free(to_free[i]);
+    free(to_free);
+    return 0;
+}
+
 static int jlcpcb_bom(const char *path, const char *out_path)
 {
     kicli_symbol_t *all = NULL;
@@ -445,6 +757,14 @@ int cmd_jlcpcb(int argc, char **argv)
         printf("                               Accepts file or directory (merges all .kicad_sch)\n");
         printf("                               Columns: Comment,Designator,Footprint,LCSC\n");
         printf("                               Groups by value+footprint, shows missing PartNo count\n");
+        printf("  check  <sch|dir> [-o OUT] [--json]\n");
+        printf("                               Cross-check schematic vs JLCPCB API per component.\n");
+        printf("                               Tab-separated columns:\n");
+        printf("                                 REF  PartNo  SchValue  JLCPCBBrand  JLCPCBModel\n");
+        printf("                                 SchFootprint  JLCPCBPackage  Stock  Match\n");
+        printf("                               Match is a substring HEURISTIC (yes/NO/?). Agent\n");
+        printf("                               must verify independently for BGA pitch, exposed-pad\n");
+        printf("                               variants, imperial/metric size collisions, etc.\n");
         printf("\nExamples:\n");
         printf("  kicli jlcpcb part C2040\n");
         printf("  kicli jlcpcb search \"100nF 0402\"\n");
@@ -484,6 +804,20 @@ int cmd_jlcpcb(int argc, char **argv)
         for (int i = 3; i < argc - 1; i++)
             if (strcmp(argv[i], "-o") == 0) out = argv[i + 1];
         return jlcpcb_bom(argv[2], out);
+    }
+
+    if (strcmp(argv[1], "check") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: kicli jlcpcb check <sch|dir> [-o OUT] [--json]\n");
+            return 1;
+        }
+        const char *out = NULL;
+        int as_json = 0;
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) out = argv[++i];
+            else if (strcmp(argv[i], "--json") == 0)         as_json = 1;
+        }
+        return jlcpcb_check(argv[2], out, as_json);
     }
 
     fprintf(stderr, "error: unknown jlcpcb command '%s'\n", argv[1]);
