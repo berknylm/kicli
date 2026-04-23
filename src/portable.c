@@ -99,6 +99,127 @@ void kicli_rmrf(const char *path)
     (void)system(cmd);
 }
 
+int kicli_rename(const char *src, const char *dst)
+{
+    if (!src || !dst) { errno = EINVAL; return -1; }
+#ifdef _WIN32
+    /* POSIX rename(2) is not atomic on Windows if dst exists. */
+    if (!MoveFileExA(src, dst, MOVEFILE_REPLACE_EXISTING)) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+#else
+    return rename(src, dst);
+#endif
+}
+
+int kicli_write_file_atomic(const char *path, const void *content, size_t len)
+{
+    if (!path || !*path) { errno = EINVAL; return -1; }
+
+    /* Write to <path>.kicli.tmp, fsync if we can, then atomically rename.
+     * We include the pid so concurrent writers don't step on each other. */
+    char tmp[KICLI_PATH_MAX];
+#ifdef _WIN32
+    unsigned long pid = (unsigned long)GetCurrentProcessId();
+#else
+    unsigned long pid = (unsigned long)getpid();
+#endif
+    int n = snprintf(tmp, sizeof(tmp), "%s.kicli.%lu.tmp", path, pid);
+    if (n < 0 || (size_t)n >= sizeof(tmp)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return -1;
+
+    if (len > 0 && content) {
+        size_t w = fwrite(content, 1, len, f);
+        if (w != len) {
+            int saved = errno;
+            fclose(f);
+            kicli_unlink(tmp);
+            errno = saved ? saved : EIO;
+            return -1;
+        }
+    }
+
+    if (fflush(f) != 0) {
+        int saved = errno;
+        fclose(f);
+        kicli_unlink(tmp);
+        errno = saved;
+        return -1;
+    }
+
+#ifndef _WIN32
+    /* Best-effort durability on POSIX. If fsync is unsupported (e.g. some
+     * network filesystems) we don't treat it as a hard failure. */
+    int fd = fileno(f);
+    if (fd >= 0) (void)fsync(fd);
+#endif
+
+    if (fclose(f) != 0) {
+        int saved = errno;
+        kicli_unlink(tmp);
+        errno = saved;
+        return -1;
+    }
+
+    if (kicli_rename(tmp, path) != 0) {
+        int saved = errno;
+        kicli_unlink(tmp);
+        errno = saved;
+        return -1;
+    }
+    return 0;
+}
+
+char *kicli_read_file(const char *path, size_t *out_len)
+{
+    if (!path || !*path) { errno = EINVAL; return NULL; }
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+
+    if (fseek(f, 0, SEEK_END) != 0) {
+        int saved = errno;
+        fclose(f);
+        errno = saved;
+        return NULL;
+    }
+    long sz = ftell(f);
+    if (sz < 0) {
+        int saved = errno;
+        fclose(f);
+        errno = saved;
+        return NULL;
+    }
+    rewind(f);
+
+    char *buf = (char *)malloc((size_t)sz + 1);
+    if (!buf) {
+        fclose(f);
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    size_t got = (sz > 0) ? fread(buf, 1, (size_t)sz, f) : 0;
+    int ferr = ferror(f);
+    fclose(f);
+    if (ferr) {
+        free(buf);
+        errno = EIO;
+        return NULL;
+    }
+
+    buf[got] = '\0';
+    if (out_len) *out_len = got;
+    return buf;
+}
+
 /* ── Temp paths ─────────────────────────────────────────────────────────── */
 
 void kicli_tempdir(char *out, size_t sz)

@@ -170,7 +170,7 @@ static int write_kicli_toml(const char *dir, const char *name) {
 
 int cmd_new(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
-        printf("Usage: kicli new <project-name> [directory]\n\n");
+        printf("Usage: kicli new <project-name> [directory] [--force]\n\n");
         printf("Creates a new KiCad 10 project:\n");
         printf("  <name>.kicad_pro    Project file\n");
         printf("  <name>.kicad_sch    Blank schematic\n");
@@ -178,11 +178,19 @@ int cmd_new(int argc, char **argv) {
         printf("  fp-lib-table        Footprint library table\n");
         printf("  libs/               Local component libraries\n");
         printf("  .kicli.toml         kicli project config\n");
+        printf("\nRefuses to overwrite an existing <name>.kicad_pro or\n");
+        printf("<name>.kicad_sch unless --force is passed.\n");
         return 0;
     }
 
     const char *name = argv[1];
-    const char *outdir = (argc >= 3) ? argv[2] : name;
+    const char *outdir = NULL;
+    int force = 0;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--force") == 0) force = 1;
+        else if (!outdir) outdir = argv[i];
+    }
+    if (!outdir) outdir = name;
 
     /* Basic name validation */
     for (const char *p = name; *p; p++) {
@@ -190,6 +198,22 @@ int cmd_new(int argc, char **argv) {
             fprintf(stderr, CLR_RED "error:" CLR_RESET
                     " name must not contain '/', '\\' or ':'\n");
             return 1;
+        }
+    }
+
+    /* Refuse to overwrite an existing project unless --force. */
+    if (!force) {
+        char probe[1024];
+        const char *guards[] = { "kicad_pro", "kicad_sch" };
+        for (size_t i = 0; i < sizeof(guards)/sizeof(guards[0]); i++) {
+            snprintf(probe, sizeof(probe), "%s/%s.%s", outdir, name, guards[i]);
+            if (kicli_exists(probe)) {
+                fprintf(stderr, CLR_RED "error:" CLR_RESET
+                        " '%s' already exists. Pick a different name/directory,\n"
+                        "       or pass --force to overwrite existing project files.\n",
+                        probe);
+                return 1;
+            }
         }
     }
 

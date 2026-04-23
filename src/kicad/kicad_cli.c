@@ -153,8 +153,35 @@ kicli_err_t kicad_cli_set_path(const char *path)
 
 /* ── Build command string ────────────────────────────────────────────────── */
 
+/* Reject characters that would break our naive double-quoted shell quoting.
+ * kicli builds a system() command string: "cli" "arg1" "arg2" — a double-quote
+ * or backtick or $ inside a path lets the shell re-interpret it. Instead of
+ * writing a full POSIX shell escaper, we refuse paths with these glyphs —
+ * they're essentially never present in real KiCad paths, and better to fail
+ * loudly than run unsafe. */
+static int arg_is_shell_safe(const char *s)
+{
+    for (const char *p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '`' || c == '$' || c == '\\' || c == '\n' || c == '\r')
+            return 0;
+    }
+    return 1;
+}
+
 static char *build_cmd(const char *cli, const char *const *args)
 {
+    if (!arg_is_shell_safe(cli)) {
+        kicli_set_error("kicad-cli path contains unsafe shell characters: %s", cli);
+        return NULL;
+    }
+    for (int i = 0; args[i]; i++) {
+        if (!arg_is_shell_safe(args[i])) {
+            kicli_set_error("argument contains unsafe shell characters: %s", args[i]);
+            return NULL;
+        }
+    }
+
     size_t len = strlen(cli) + 4;
     for (int i = 0; args[i]; i++) len += strlen(args[i]) + 3;
 
@@ -186,14 +213,22 @@ kicli_err_t kicad_cli_run(const char *const *args)
     char err_tmp[KICLI_PATH_MAX];
     kicli_temp_path(err_tmp, sizeof(err_tmp), "err", "txt");
 
-    char cmd2[8192];
-#ifdef _WIN32
-    snprintf(cmd2, sizeof(cmd2), "%s 2> \"%s\"", cmd, err_tmp);
-#else
-    snprintf(cmd2, sizeof(cmd2), "%s 2> \"%s\"", cmd, err_tmp);
-#endif
-    int ret = system(cmd2);
+    /* Size the full command string dynamically to avoid truncating on long
+     * paths (our old 8192-byte cmd2 could silently drop the redirect suffix,
+     * which would leak Fontconfig noise AND on Windows break quoting). */
+    size_t cmd2_len = strlen(cmd) + strlen(err_tmp) + 16;
+    char *cmd2 = malloc(cmd2_len);
+    if (!cmd2) { free(cmd); kicli_set_error("out of memory"); return KICLI_ERR_OOM; }
+    int w = snprintf(cmd2, cmd2_len, "%s 2> \"%s\"", cmd, err_tmp);
     free(cmd);
+    if (w < 0 || (size_t)w >= cmd2_len) {
+        free(cmd2);
+        kicli_set_error("command string too long");
+        return KICLI_ERR_SUBPROCESS;
+    }
+
+    int ret = system(cmd2);
+    free(cmd2);
 
     FILE *ef = fopen(err_tmp, "r");
     if (ef) {
@@ -229,34 +264,41 @@ kicli_err_t kicad_cli_capture(const char *const *args, char **output)
     char tmp[KICLI_PATH_MAX];
     kicli_temp_path(tmp, sizeof(tmp), "cap", "txt");
 
-    char cmd2[4096];
-    snprintf(cmd2, sizeof(cmd2), "\"%s >\"%s\" 2>nul\"", cmd, tmp);
+    size_t cmd2_len = strlen(cmd) + strlen(tmp) + 32;
+    char *cmd2 = malloc(cmd2_len);
+    if (!cmd2) { free(cmd); kicli_set_error("out of memory"); return KICLI_ERR_OOM; }
+    int w = snprintf(cmd2, cmd2_len, "\"%s >\"%s\" 2>nul\"", cmd, tmp);
     free(cmd);
-
-    if (system(cmd2) != 0) {
+    if (w < 0 || (size_t)w >= cmd2_len) {
+        free(cmd2); kicli_set_error("command string too long"); return KICLI_ERR_SUBPROCESS;
+    }
+    int rc = system(cmd2);
+    free(cmd2);
+    if (rc != 0) {
         kicli_unlink(tmp);
         kicli_set_error("kicad-cli failed");
         return KICLI_ERR_SUBPROCESS;
     }
 
-    FILE *tf = fopen(tmp, "rb");
-    if (!tf) { kicli_unlink(tmp); kicli_set_error("cannot read output"); return KICLI_ERR_IO; }
-    fseek(tf, 0, SEEK_END);
-    long sz = ftell(tf); rewind(tf);
-    char *buf = malloc((size_t)(sz < 0 ? 1 : sz + 1));
-    if (!buf) { fclose(tf); kicli_unlink(tmp); return KICLI_ERR_OOM; }
-    size_t n = (sz > 0) ? fread(buf, 1, (size_t)sz, tf) : 0;
-    buf[n] = '\0';
-    fclose(tf); kicli_unlink(tmp);
+    /* Use the shared atomic-safe reader so we get proper ftell handling. */
+    char *buf = kicli_read_file(tmp, NULL);
+    kicli_unlink(tmp);
+    if (!buf) { kicli_set_error("cannot read kicad-cli output"); return KICLI_ERR_IO; }
     *output = buf;
     return KICLI_OK;
 
 #else
-    char cmd2[4096];
-    snprintf(cmd2, sizeof(cmd2), "%s 2>/dev/null", cmd);
+    size_t cmd2_len = strlen(cmd) + 24;
+    char *cmd2 = malloc(cmd2_len);
+    if (!cmd2) { free(cmd); kicli_set_error("out of memory"); return KICLI_ERR_OOM; }
+    int w = snprintf(cmd2, cmd2_len, "%s 2>/dev/null", cmd);
     free(cmd);
+    if (w < 0 || (size_t)w >= cmd2_len) {
+        free(cmd2); kicli_set_error("command string too long"); return KICLI_ERR_SUBPROCESS;
+    }
 
     FILE *fp = popen(cmd2, "r");
+    free(cmd2);
     if (!fp) { kicli_set_error("failed to run kicad-cli"); return KICLI_ERR_SUBPROCESS; }
 
     size_t size = 0, cap = 4096;

@@ -516,63 +516,8 @@ void kicli_sch_print_tree(const kicli_schematic_t *sch)
     printf("  globals:   %zu\n", sch->num_global_labels);
 }
 
-/* ── Stub: write back ─────────────────────────────────────────────────────── */
-
-kicli_err_t kicli_sch_write(const kicli_schematic_t *sch, const char *path, bool backup)
-{
-    (void)sch; (void)path; (void)backup;
-    kicli_set_error("sch write not yet implemented");
-    return KICLI_ERR_NOT_IMPLEMENTED;
-}
-
-/* ── Stubs: ops ───────────────────────────────────────────────────────────── */
-
-kicli_err_t kicli_sch_add_symbol(kicli_schematic_t *s, const char *lib_id,
-                                  const char *ref, const char *value, kicli_pos_t at)
-{ (void)s;(void)lib_id;(void)ref;(void)value;(void)at;
-  kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
-
-kicli_err_t kicli_sch_remove_symbol(kicli_schematic_t *s, const char *ref)
-{ (void)s;(void)ref;
-  kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
-
-kicli_err_t kicli_sch_move_symbol(kicli_schematic_t *s, const char *ref, double x, double y)
-{ (void)s;(void)ref;(void)x;(void)y;
-  kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
-
-kicli_err_t kicli_sch_connect(kicli_schematic_t *s, const char *a, const char *b)
-{ (void)s;(void)a;(void)b;
-  kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
-
-kicli_err_t kicli_sch_disconnect(kicli_schematic_t *s, const char *a, const char *b)
-{ (void)s;(void)a;(void)b;
-  kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
-
-kicli_err_t kicli_sch_rename(kicli_schematic_t *s, const char *old, const char *newref)
-{ (void)s;(void)old;(void)newref;
-  kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
-
-kicli_err_t kicli_sch_set_field(kicli_schematic_t *s, const char *ref,
-                                  const char *field, const char *value)
-{ (void)s;(void)ref;(void)field;(void)value;
-  kicli_set_error("not yet implemented"); return KICLI_ERR_NOT_IMPLEMENTED; }
-
-/* ── Stubs: diff / validate / export ──────────────────────────────────────── */
-
-kicli_sch_diff_t *kicli_sch_diff(const kicli_schematic_t *a, const kicli_schematic_t *b)
-{ (void)a;(void)b; return NULL; }
-
-void kicli_sch_diff_print(const kicli_sch_diff_t *d) { (void)d; }
-void kicli_sch_diff_free(kicli_sch_diff_t *d) { free(d); }
-
-kicli_validation_t *kicli_sch_validate(const kicli_schematic_t *sch)
-{ (void)sch; return NULL; }
-
-void kicli_validation_print(const kicli_validation_t *v) { (void)v; }
-void kicli_validation_free(kicli_validation_t *v) { free(v); }
-
-kicli_err_t kicli_sch_export(const char *sch_path, const char *format,
-                               const char *output_path)
-{ (void)sch_path;(void)format;(void)output_path;
-  kicli_set_error("use 'kicli sch <file> export <fmt>' to delegate to kicad-cli");
-  return KICLI_ERR_NOT_IMPLEMENTED; }
+/* All historical `kicli_sch_*` edit stubs (write, add_symbol, remove_symbol,
+ * move_symbol, connect/disconnect, rename, set_field, diff, validate, export)
+ * were removed in v0.7.2. They were never called by any kicli command —
+ * schematic edits go through dedicated ops in src/sch/ops/ (set, set-all).
+ * If you need programmatic editing, call those instead. */

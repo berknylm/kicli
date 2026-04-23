@@ -19,16 +19,8 @@
 
 static char *read_file(const char *path)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) { kicli_set_error("cannot open '%s': %s", path, strerror(errno)); return NULL; }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = malloc((size_t)sz + 1);
-    if (!buf) { fclose(f); kicli_set_error("out of memory"); return NULL; }
-    size_t n = fread(buf, 1, (size_t)sz, f);
-    fclose(f);
-    buf[n] = '\0';
+    char *buf = kicli_read_file(path, NULL);
+    if (!buf) kicli_set_error("cannot read '%s': %s", path, strerror(errno));
     return buf;
 }
 
@@ -110,7 +102,10 @@ static sexpr_t *make_property_node(const char *field, const char *value)
 int cmd_sch_set(const char *sch_path, const char *ref, const char *field, const char *value)
 {
     char *buf = read_file(sch_path);
-    if (!buf) return 1;
+    if (!buf) {
+        fprintf(stderr, "error: %s\n", kicli_last_error());
+        return 3;  /* IO */
+    }
 
     char errbuf[256] = {0};
     sexpr_t *root = sexpr_parse(buf, errbuf, sizeof(errbuf));
@@ -119,14 +114,14 @@ int cmd_sch_set(const char *sch_path, const char *ref, const char *field, const 
     if (!root) {
         kicli_set_error("parse error: %s", errbuf[0] ? errbuf : "unknown");
         fprintf(stderr, "error: %s\n", kicli_last_error());
-        return 1;
+        return 4;  /* parse */
     }
 
     sexpr_t *sym = find_symbol_node(root, ref);
     if (!sym) {
         fprintf(stderr, "error: component '%s' not found\n", ref);
         sexpr_free(root);
-        return 1;
+        return 2;  /* not found */
     }
 
     sexpr_t *prop = find_property_node(sym, field);
@@ -146,9 +141,10 @@ int cmd_sch_set(const char *sch_path, const char *ref, const char *field, const 
     }
 
     if (sexpr_write_file(root, sch_path) != 0) {
-        fprintf(stderr, "error: cannot write '%s'\n", sch_path);
+        fprintf(stderr, "error: cannot write '%s': %s\n",
+                sch_path, strerror(errno));
         sexpr_free(root);
-        return 1;
+        return 3;  /* IO */
     }
 
     sexpr_free(root);
@@ -175,19 +171,30 @@ static int glob_match(const char *pattern, const char *str)
     return *str == '\0';
 }
 
-/* apply set-all to a single file: match by value (+optional footprint), set field=new_val */
+/* apply set-all to a single file: match by value (+optional footprint), set field=new_val.
+ * Returns number of components changed (dry-run counts too), or -1 on any error
+ * reading/parsing the file. Errors are also reported to stderr so a directory
+ * walk doesn't silently skip broken sheets. */
 static int set_all_in_file(const char *sch_path,
                            const char *val_match, const char *fp_match,
                            const char *field, const char *new_val,
                            int dry_run)
 {
     char *buf = read_file(sch_path);
-    if (!buf) return 0; /* skip unreadable files */
+    if (!buf) {
+        fprintf(stderr, "warning: %s: %s (skipped)\n",
+                sch_path, kicli_last_error());
+        return -1;
+    }
 
     char errbuf[256] = {0};
     sexpr_t *root = sexpr_parse(buf, errbuf, sizeof(errbuf));
     free(buf);
-    if (!root) return 0;
+    if (!root) {
+        fprintf(stderr, "warning: %s: parse error: %s (skipped)\n",
+                sch_path, errbuf[0] ? errbuf : "unknown");
+        return -1;
+    }
 
     int changed = 0;
 
@@ -231,7 +238,14 @@ static int set_all_in_file(const char *sch_path,
         changed++;
     }
 
-    if (changed && !dry_run) sexpr_write_file(root, sch_path);
+    if (changed && !dry_run) {
+        if (sexpr_write_file(root, sch_path) != 0) {
+            fprintf(stderr, "warning: %s: write failed: %s\n",
+                    sch_path, strerror(errno));
+            sexpr_free(root);
+            return -1;
+        }
+    }
     sexpr_free(root);
     return changed;
 }
@@ -266,20 +280,25 @@ int cmd_sch_set_all(const char *path, int argc, char **argv)
 
     int total = 0;
 
+    int any_error = 0;
     if (kicli_is_dir(path)) {
         kicli_dir_t *dir = kicli_opendir(path);
-        if (!dir) { fprintf(stderr, "error: cannot open dir '%s'\n", path); return 1; }
+        if (!dir) { fprintf(stderr, "error: cannot open dir '%s'\n", path); return 3; }
         const char *name;
         while ((name = kicli_readdir(dir)) != NULL) {
             size_t nl = strlen(name);
             if (nl < 10 || strcmp(name + nl - 10, ".kicad_sch") != 0) continue;
             char fpath[1024];
             snprintf(fpath, sizeof(fpath), "%s%c%s", path, KICLI_PATH_SEP, name);
-            total += set_all_in_file(fpath, val_match, fp_match, field, new_val, dry_run);
+            int rc = set_all_in_file(fpath, val_match, fp_match, field, new_val, dry_run);
+            if (rc < 0) any_error = 1;
+            else total += rc;
         }
         kicli_closedir(dir);
     } else {
-        total = set_all_in_file(path, val_match, fp_match, field, new_val, dry_run);
+        int rc = set_all_in_file(path, val_match, fp_match, field, new_val, dry_run);
+        if (rc < 0) return 3;
+        total = rc;
     }
 
     if (total == 0)
@@ -288,5 +307,5 @@ int cmd_sch_set_all(const char *path, int argc, char **argv)
         printf("%d component(s) would be updated\n", total);
     else
         printf("%d component(s) updated\n", total);
-    return 0;
+    return any_error ? 3 : 0;
 }

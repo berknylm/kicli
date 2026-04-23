@@ -42,6 +42,22 @@ int  kicli_unlink(const char *path);
 /* Recursively delete a directory tree (uses platform shell). */
 void kicli_rmrf(const char *path);
 
+/* Atomically rename/replace dst with src. Overwrites dst if it exists.
+ * On POSIX this is a simple rename(2). On Windows, uses MoveFileExA with
+ * MOVEFILE_REPLACE_EXISTING. Returns 0 on success, -1 on failure. */
+int  kicli_rename(const char *src, const char *dst);
+
+/* Atomic-write helper: writes `content` (of length `len`) to <path>.tmp, then
+ * renames to `path`. If the process dies mid-write, the original `path` is
+ * untouched — the partial tmp file is left behind (and harmless on next run).
+ * Returns 0 on success, -1 on failure. errno set on failure. */
+int  kicli_write_file_atomic(const char *path, const void *content, size_t len);
+
+/* Read entire file into a heap buffer, NUL-terminated. Returns NULL on any
+ * error; caller frees. If out_len is non-NULL, receives the byte length
+ * (excluding the NUL). Zero-byte files return a valid 1-byte "" buffer. */
+char *kicli_read_file(const char *path, size_t *out_len);
+
 /* ── Temp paths ─────────────────────────────────────────────────────────── */
 
 /* Write the system temp dir with trailing separator to out. */

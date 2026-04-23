@@ -168,10 +168,6 @@ typedef struct {
 kicli_err_t kicli_sch_read(const char *path, kicli_schematic_t **out);
 void        kicli_sch_free(kicli_schematic_t *sch);
 
-/* ── Write back ──────────────────────────────────────────────────────────── */
-
-kicli_err_t kicli_sch_write(const kicli_schematic_t *sch, const char *path, bool backup);
-
 /* ── Lookup helpers ──────────────────────────────────────────────────────── */
 
 kicli_symbol_t    *kicli_sch_symbol_by_ref(kicli_schematic_t *sch, const char *ref);
@@ -179,58 +175,12 @@ kicli_lib_symbol_t *kicli_sch_find_lib_symbol(kicli_schematic_t *sch, const char
 bool kicli_sch_pin_position(const kicli_schematic_t *sch, const char *ref,
                              const char *pin_number, kicli_pt_t *out);
 
-/* ── View ────────────────────────────────────────────────────────────────── */
+/* Note: the historical kicli_sch_write / kicli_sch_add_symbol / etc. entry
+ * points were never wired up — schematic edits go through the dedicated
+ * ops in src/sch/ops/ (set, set-all) which do direct s-expression writes. */
 
-/* ── Operations ──────────────────────────────────────────────────────────── */
-
-kicli_err_t kicli_sch_add_symbol(kicli_schematic_t *sch, const char *lib_id,
-                                  const char *ref, const char *value, kicli_pos_t at);
-kicli_err_t kicli_sch_remove_symbol(kicli_schematic_t *sch, const char *ref);
-kicli_err_t kicli_sch_move_symbol(kicli_schematic_t *sch, const char *ref, double x, double y);
-kicli_err_t kicli_sch_connect(kicli_schematic_t *sch, const char *pin_a, const char *pin_b);
-kicli_err_t kicli_sch_disconnect(kicli_schematic_t *sch, const char *pin_a, const char *pin_b);
-kicli_err_t kicli_sch_rename(kicli_schematic_t *sch, const char *old_ref, const char *new_ref);
-kicli_err_t kicli_sch_set_field(kicli_schematic_t *sch, const char *ref,
-                                  const char *field, const char *value);
-
-/* ── Diff ────────────────────────────────────────────────────────────────── */
-
-typedef struct {
-    char  reference[64];
-    char  field[128];
-    char *old_value; /* heap */
-    char *new_value; /* heap */
-} kicli_sch_field_change_t;
-
-typedef struct {
-    char                   **added;         /* references added in b   */
-    size_t                   num_added;
-    char                   **removed;       /* references removed in b  */
-    size_t                   num_removed;
-    kicli_sch_field_change_t *changes;      /* field-level changes      */
-    size_t                   num_changes;
-    size_t                   wires_added;
-    size_t                   wires_removed;
-} kicli_sch_diff_t;
-
-kicli_sch_diff_t *kicli_sch_diff(const kicli_schematic_t *a, const kicli_schematic_t *b);
-void              kicli_sch_diff_print(const kicli_sch_diff_t *d);
-void              kicli_sch_diff_free(kicli_sch_diff_t *d);
-
-/* ── Validate (ERC) ──────────────────────────────────────────────────────── */
-
-typedef struct { char message[512]; char reference[64]; } kicli_erc_issue_t;
-
-typedef struct {
-    kicli_erc_issue_t *errors;
-    size_t             num_errors;
-    kicli_erc_issue_t *warnings;
-    size_t             num_warnings;
-} kicli_validation_t;
-
-kicli_validation_t *kicli_sch_validate(const kicli_schematic_t *sch);
-void                kicli_validation_print(const kicli_validation_t *v);
-void                kicli_validation_free(kicli_validation_t *v);
+/* (Removed: kicli_sch_diff / kicli_sch_validate stubs were never wired up.
+ * Use `kicli sch erc` for schematic rule checks — it delegates to kicad-cli. */
 
 /* ── Export ──────────────────────────────────────────────────────────────── */
 

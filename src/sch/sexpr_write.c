@@ -3,9 +3,16 @@
  */
 
 #include "kicli/sch.h"
+#include "kicli/portable.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#  include <windows.h>
+#else
+#  include <unistd.h>
+#endif
 
 /* ── Node builders ────────────────────────────────────────────────────────── */
 
@@ -114,10 +121,43 @@ static void write_node(FILE *f, const sexpr_t *node, int depth)
 
 int sexpr_write_file(const sexpr_t *root, const char *path)
 {
-    FILE *f = fopen(path, "w");
+    /* Atomic write: stage to <path>.kicli.<pid>.tmp, then rename over the
+     * target. This keeps the original file intact if the process dies
+     * mid-write (crash, power loss, SIGKILL, etc). */
+    char tmp[KICLI_PATH_MAX];
+#ifdef _WIN32
+    unsigned long pid = (unsigned long)GetCurrentProcessId();
+#else
+    unsigned long pid = (unsigned long)getpid();
+#endif
+    int n = snprintf(tmp, sizeof(tmp), "%s.kicli.%lu.tmp", path, pid);
+    if (n < 0 || (size_t)n >= sizeof(tmp)) return -1;
+
+    FILE *f = fopen(tmp, "wb");
     if (!f) return -1;
+
     write_node(f, root, 0);
     fputc('\n', f);
-    fclose(f);
+
+    if (fflush(f) != 0 || ferror(f)) {
+        fclose(f);
+        kicli_unlink(tmp);
+        return -1;
+    }
+
+#ifndef _WIN32
+    int fd = fileno(f);
+    if (fd >= 0) (void)fsync(fd);
+#endif
+
+    if (fclose(f) != 0) {
+        kicli_unlink(tmp);
+        return -1;
+    }
+
+    if (kicli_rename(tmp, path) != 0) {
+        kicli_unlink(tmp);
+        return -1;
+    }
     return 0;
 }
