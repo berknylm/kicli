@@ -620,10 +620,12 @@ static int placed_cmp(const void *a, const void *b)
 /* ── Write .kisch output ─────────────────────────────────────────────────── */
 
 static void write_kisch(FILE *f, const char *sch_path,
+                        const char *sheet_label,
                         const dump_comp_t *comps, size_t count,
                         const dump_sheet_t *sheets, size_t sheet_count,
                         const dump_hier_label_t *hlbls, size_t hlbl_count)
 {
+    (void)sheet_label;  /* referenced in the ref-block header below */
     size_t total_pins = 0;
     int w_refpin = 4, w_name = 4, w_type = 4;
 
@@ -649,6 +651,8 @@ static void write_kisch(FILE *f, const char *sch_path,
     const char *fname2 = strrchr(sch_path, '\\');
     if (!fname || (fname2 && fname2 > fname)) fname = fname2;
 #endif
+    if (sheet_label && sheet_label[0])
+        fprintf(f, "# === sheet: %s ===\n", sheet_label);
     fprintf(f, "# %s  (%zu components, %zu pins)\n",
             fname ? fname + 1 : sch_path, count, total_pins);
     fprintf(f, "# REF:PIN  NAME  TYPE  → NET\n");
@@ -657,7 +661,12 @@ static void write_kisch(FILE *f, const char *sch_path,
 
     for (size_t i = 0; i < count; i++) {
         const dump_comp_t *c = &comps[i];
-        if (c->value[0])
+        if (sheet_label && sheet_label[0]) {
+            if (c->value[0])
+                fprintf(f, "[%s/%s: %s]\n", sheet_label, c->ref, c->value);
+            else
+                fprintf(f, "[%s/%s]\n", sheet_label, c->ref);
+        } else if (c->value[0])
             fprintf(f, "[%s: %s]\n", c->ref, c->value);
         else
             fprintf(f, "[%s]\n", c->ref);
@@ -700,17 +709,19 @@ static void write_kisch(FILE *f, const char *sch_path,
     }
 }
 
-/* ── Public: cmd_sch_view ────────────────────────────────────────────────── */
-
-int cmd_sch_view(const char *sch_path, int argc, char **argv)
+/* ── Worker: render view for one .kicad_sch ──────────────────────────────── */
+/*
+ *   fp_out               — destination stream (stdout or pre-opened file)
+ *   netlist_override     — path to a kicad-cli netlist file to use. If NULL,
+ *                          kicad-cli is invoked on sch_path to generate it.
+ *   sheet_label          — optional short label (stem of filename) to tag
+ *                          component blocks with when aggregating across
+ *                          a multi-sheet project.
+ */
+static int view_render(const char *sch_path, FILE *fp_out,
+                        const char *netlist_override,
+                        const char *sheet_label)
 {
-    const char *outfile = NULL;
-    for (int i = 0; i < argc; i++) {
-        if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0)
-            && i + 1 < argc)
-            outfile = argv[i + 1];
-    }
-
     /* ── Pass 1: parse .kicad_sch ─────────────────────────────────────── */
     lib_sym_def_t     *libs   = NULL; size_t lib_count = 0;
     placed_sym_t      *placed = NULL; size_t placed_count = 0;
@@ -732,24 +743,32 @@ int cmd_sch_view(const char *sch_path, int argc, char **argv)
 
     /* ── Pass 2: kicad-cli netlist → labeled nets ─────────────────────── */
     char tmp[KICLI_PATH_MAX];
-    kicli_temp_path(tmp, sizeof(tmp), "nl", "net");
-
-    const char *nl_args[] = {
-        "sch", "export", "netlist",
-        "--format", "kicadsexpr",
-        "--output", tmp,
-        sch_path, NULL
-    };
-
+    const char *netlist_path = NULL;
+    int own_netlist = 0;
     net_map_t nmap = {NULL, 0, 0};
-    kicli_err_t err = kicad_cli_run(nl_args);
-    if (err == KICLI_OK) {
-        parse_netlist_nets(tmp, &nmap);
-        kicli_unlink(tmp);
+
+    if (netlist_override) {
+        netlist_path = netlist_override;
     } else {
-        fprintf(stderr, "warning: kicad-cli netlist failed — nets may be incomplete\n");
-        kicli_unlink(tmp);
+        kicli_temp_path(tmp, sizeof(tmp), "nl", "net");
+        const char *nl_args[] = {
+            "sch", "export", "netlist",
+            "--format", "kicadsexpr",
+            "--output", tmp,
+            sch_path, NULL
+        };
+        kicli_err_t err = kicad_cli_run(nl_args);
+        if (err == KICLI_OK) {
+            netlist_path = tmp;
+            own_netlist  = 1;
+        } else {
+            fprintf(stderr, "warning: kicad-cli netlist failed — nets may be incomplete\n");
+            kicli_unlink(tmp);
+        }
     }
+
+    if (netlist_path) parse_netlist_nets(netlist_path, &nmap);
+    if (own_netlist)  kicli_unlink(tmp);
 
     /* ── Sort placed symbols ──────────────────────────────────────────── */
     qsort(placed, placed_count, sizeof(placed_sym_t), placed_cmp);
@@ -896,27 +915,9 @@ int cmd_sch_view(const char *sch_path, int argc, char **argv)
 
     free(uf_nodes);
 
-    /* ── Output ───────────────────────────────────────────────────────── */
-    FILE *f = stdout;
-    if (outfile) {
-        f = fopen(outfile, "w");
-        if (!f) {
-            fprintf(stderr, "error: cannot write '%s'\n", outfile);
-            goto cleanup;
-        }
-    }
+    write_kisch(fp_out, sch_path, sheet_label, comps, comp_count,
+                sheets, sheet_count, hlbls, hlbl_count);
 
-    write_kisch(f, sch_path, comps, comp_count, sheets, sheet_count, hlbls, hlbl_count);
-
-    if (outfile) {
-        fclose(f);
-        size_t total = 0;
-        for (size_t i = 0; i < comp_count; i++) total += comps[i].num_pins;
-        printf("wrote %s  (%zu components, %zu pins)\n",
-               outfile, comp_count, total);
-    }
-
-cleanup:
     net_map_free(&nmap);
     for (size_t i = 0; i < lib_count; i++) free(libs[i].pins);
     free(libs); free(placed); free(nc_pts); free(wires);
@@ -936,4 +937,177 @@ oom:
     free(comps);
     kicli_set_error("out of memory");
     return 1;
+}
+
+/* ── Public: cmd_sch_view (single file) ──────────────────────────────────── */
+
+int cmd_sch_view(const char *sch_path, int argc, char **argv)
+{
+    const char *outfile = NULL;
+    for (int i = 0; i < argc; i++) {
+        if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0)
+            && i + 1 < argc)
+            outfile = argv[i + 1];
+    }
+
+    FILE *fp = stdout;
+    if (outfile) {
+        fp = fopen(outfile, "w");
+        if (!fp) {
+            fprintf(stderr, "error: cannot write '%s'\n", outfile);
+            return 3;
+        }
+    }
+
+    int rc = view_render(sch_path, fp, NULL, NULL);
+
+    if (outfile) {
+        fclose(fp);
+        if (rc == 0) printf("wrote %s\n", outfile);
+    }
+    return rc;
+}
+
+/* ── Public: cmd_sch_view_dir (multi-sheet project view) ─────────────────── */
+
+/* Find the root .kicad_sch by matching the <stem>.kicad_pro found in dir.
+ * On success writes the full path to out and returns 0. */
+static int find_root_sch(const char *dir, char *out, size_t outsz)
+{
+    /* Iterate every .kicad_pro — a directory may contain multiple (e.g. a
+     * separate PCB-only project). Pick the first one whose sibling
+     * <stem>.kicad_sch actually exists. */
+    kicli_dir_t *d = kicli_opendir(dir);
+    if (!d) return -1;
+
+    const char *name;
+    while ((name = kicli_readdir(d)) != NULL) {
+        size_t nl = strlen(name);
+        if (nl <= 10 || strcmp(name + nl - 10, ".kicad_pro") != 0) continue;
+
+        char stem[256];
+        size_t stemlen = nl - 10;
+        if (stemlen >= sizeof(stem)) stemlen = sizeof(stem) - 1;
+        memcpy(stem, name, stemlen);
+        stem[stemlen] = '\0';
+
+        char candidate[KICLI_PATH_MAX];
+        snprintf(candidate, sizeof(candidate), "%s%c%s.kicad_sch",
+                 dir, KICLI_PATH_SEP, stem);
+        if (kicli_exists(candidate)) {
+            kicli_closedir(d);
+            snprintf(out, outsz, "%s", candidate);
+            return 0;
+        }
+    }
+    kicli_closedir(d);
+    return -1;
+}
+
+static void view_sheet_label(char *out, size_t outsz, const char *filename)
+{
+    snprintf(out, outsz, "%s", filename);
+    char *dot = strstr(out, ".kicad_sch");
+    if (dot) *dot = '\0';
+}
+
+int cmd_sch_view_dir(const char *dir, int argc, char **argv)
+{
+    const char *outfile = NULL;
+    for (int i = 0; i < argc; i++) {
+        if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0)
+            && i + 1 < argc)
+            outfile = argv[i + 1];
+    }
+
+    /* Find root .kicad_sch; run kicad-cli netlist on it ONCE so that every
+     * sub-sheet share the same globally-resolved net names (this is how
+     * hierarchical label ↔ sheet pin bridges get reflected). */
+    char root_path[KICLI_PATH_MAX];
+    int have_root = (find_root_sch(dir, root_path, sizeof(root_path)) == 0);
+
+    char nl_tmp[KICLI_PATH_MAX] = {0};
+    const char *nl_override = NULL;
+    if (have_root) {
+        kicli_temp_path(nl_tmp, sizeof(nl_tmp), "nl", "net");
+        const char *nl_args[] = {
+            "sch", "export", "netlist",
+            "--format", "kicadsexpr",
+            "--output", nl_tmp,
+            root_path, NULL
+        };
+        if (kicad_cli_run(nl_args) == KICLI_OK) {
+            nl_override = nl_tmp;
+        } else {
+            fprintf(stderr,
+                    "warning: kicad-cli netlist on root '%s' failed; "
+                    "falling back to per-sheet nets\n", root_path);
+            kicli_unlink(nl_tmp);
+        }
+    } else {
+        fprintf(stderr,
+                "warning: no .kicad_pro found in '%s'; net names will not be "
+                "resolved across sheets\n", dir);
+    }
+
+    FILE *fp = stdout;
+    if (outfile) {
+        fp = fopen(outfile, "w");
+        if (!fp) {
+            fprintf(stderr, "error: cannot write '%s'\n", outfile);
+            if (nl_override) kicli_unlink(nl_tmp);
+            return 3;
+        }
+    }
+
+    fprintf(fp, "# project: %s\n", dir);
+    if (have_root) {
+        const char *rslash = strrchr(root_path, KICLI_PATH_SEP);
+        fprintf(fp, "# root:    %s\n",
+                rslash ? rslash + 1 : root_path);
+    }
+    if (nl_override)
+        fprintf(fp, "# nets resolved across sheets via kicad-cli netlist\n");
+    else
+        fprintf(fp, "# nets are per-sheet only (root netlist unavailable)\n");
+    fprintf(fp, "\n");
+
+    kicli_dir_t *d = kicli_opendir(dir);
+    if (!d) {
+        fprintf(stderr, "error: cannot open dir '%s'\n", dir);
+        if (outfile) fclose(fp);
+        if (nl_override) kicli_unlink(nl_tmp);
+        return 3;
+    }
+
+    int any = 0, worst = 0;
+    const char *name;
+    while ((name = kicli_readdir(d)) != NULL) {
+        size_t nl = strlen(name);
+        if (nl < 10 || strcmp(name + nl - 10, ".kicad_sch") != 0) continue;
+
+        char full[KICLI_PATH_MAX];
+        snprintf(full, sizeof(full), "%s%c%s", dir, KICLI_PATH_SEP, name);
+
+        char label[256];
+        view_sheet_label(label, sizeof(label), name);
+
+        int rc = view_render(full, fp, nl_override, label);
+        if (rc != 0 && rc > worst) worst = rc;
+        any = 1;
+    }
+    kicli_closedir(d);
+
+    if (outfile) fclose(fp);
+    if (nl_override) kicli_unlink(nl_tmp);
+
+    if (!any) {
+        fprintf(stderr, "error: no .kicad_sch files in '%s'\n", dir);
+        return 2;
+    }
+
+    if (outfile && worst == 0)
+        printf("wrote %s\n", outfile);
+
+    return worst;
 }

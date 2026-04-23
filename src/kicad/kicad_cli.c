@@ -181,8 +181,30 @@ kicli_err_t kicad_cli_run(const char *const *args)
     char *cmd = build_cmd(cli, args);
     if (!cmd) { kicli_set_error("out of memory"); return KICLI_ERR_OOM; }
 
-    int ret = system(cmd);
+    /* Capture stderr so we can filter out Fontconfig noise without losing
+     * legitimate error messages. */
+    char err_tmp[KICLI_PATH_MAX];
+    kicli_temp_path(err_tmp, sizeof(err_tmp), "err", "txt");
+
+    char cmd2[8192];
+#ifdef _WIN32
+    snprintf(cmd2, sizeof(cmd2), "%s 2> \"%s\"", cmd, err_tmp);
+#else
+    snprintf(cmd2, sizeof(cmd2), "%s 2> \"%s\"", cmd, err_tmp);
+#endif
+    int ret = system(cmd2);
     free(cmd);
+
+    FILE *ef = fopen(err_tmp, "r");
+    if (ef) {
+        char line[4096];
+        while (fgets(line, sizeof(line), ef)) {
+            if (strstr(line, "Fontconfig")) continue;
+            fputs(line, stderr);
+        }
+        fclose(ef);
+    }
+    kicli_unlink(err_tmp);
 
     if (ret != 0) {
         kicli_set_error("kicad-cli exited with code %d", ret);

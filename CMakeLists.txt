@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(kicli VERSION 0.5.1 LANGUAGES C)
+project(kicli VERSION 0.6.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -53,6 +53,10 @@ target_include_directories(kicli PRIVATE
 target_link_libraries(kicli PRIVATE
     CURL::libcurl
     ${PLATFORM_LIBS}
+)
+
+target_compile_definitions(kicli PRIVATE
+    KICLI_VERSION="${PROJECT_VERSION}"
 )
 
 if(MSVC)

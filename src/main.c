@@ -130,7 +130,7 @@ int main(int argc, char *argv[]) {
     const char *cmd = argv[1];
 
     if (strcmp(cmd, "--version") == 0 || strcmp(cmd, "-V") == 0) {
-        printf("kicli 0.5.0\n");
+        printf("kicli %s\n", KICLI_VERSION);
         return 0;
     }
     if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
