@@ -20,13 +20,7 @@
 #include <errno.h>
 #include <time.h>
 
-#ifdef _WIN32
-#  include <direct.h>
-static int make_dir(const char *p) { return _mkdir(p); }
-#else
-#  include <sys/stat.h>
-static int make_dir(const char *p) { return mkdir(p, 0755); }
-#endif
+#include "kicli/portable.h"
 
 #define CLR_RESET  "\x1b[0m"
 #define CLR_BOLD   "\x1b[1m"
@@ -38,7 +32,7 @@ static int make_dir(const char *p) { return mkdir(p, 0755); }
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
 static int ensure_dir(const char *path) {
-    if (make_dir(path) != 0 && errno != EEXIST) {
+    if (kicli_mkdir(path) != 0) {
         fprintf(stderr, CLR_RED "error:" CLR_RESET
                 " cannot create '%s': %s\n", path, strerror(errno));
         return -1;

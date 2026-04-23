@@ -15,26 +15,8 @@
 #include <string.h>
 #include <errno.h>
 #include <ctype.h>
-#include <sys/stat.h>
 
-#ifdef _WIN32
-#  include <windows.h>
-#  include <direct.h>
-#  include <io.h>
-#  define PATH_SEP '\\'
-#  define make_dir(p) _mkdir(p)
-#  define F_OK 0
-#  define access _access
-#  ifndef S_ISDIR
-#    define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
-#  endif
-#else
-#  include <unistd.h>
-#  include <dirent.h>
-#  define PATH_SEP '/'
-#  define make_dir(p) mkdir(p, 0755)
-#endif
-
+#include "kicli/portable.h"
 #include "kicli/import.h"
 #include "kicli/sch.h"
 #include "kicli/error.h"
@@ -60,19 +42,13 @@ typedef struct {
 
 static int ensure_dir(const char *path)
 {
-    struct stat st;
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) return 0;
-    if (make_dir(path) != 0 && errno != EEXIST) {
+    if (kicli_is_dir(path)) return 0;
+    if (kicli_mkdir(path) != 0) {
         fprintf(stderr, CLR_RED "error:" CLR_RESET " cannot create '%s': %s\n",
                 path, strerror(errno));
         return -1;
     }
     return 0;
-}
-
-static int file_exists(const char *path)
-{
-    return access(path, F_OK) == 0;
 }
 
 static void copy_file(const char *src, const char *dst)
@@ -132,33 +108,21 @@ static int find_project_dir(const char *start, char *out, size_t outsz)
     snprintf(dir, sizeof(dir), "%s", start);
 
     for (int depth = 0; depth < 4; depth++) {
-#ifdef _WIN32
-        char pattern[1024];
-        snprintf(pattern, sizeof(pattern), "%s\\*.kicad_pro", dir);
-        WIN32_FIND_DATAA fd;
-        HANDLE h = FindFirstFileA(pattern, &fd);
-        if (h != INVALID_HANDLE_VALUE) {
-            FindClose(h);
-            snprintf(out, outsz, "%s", dir);
-            return 0;
-        }
-#else
-        DIR *d = opendir(dir);
+        kicli_dir_t *d = kicli_opendir(dir);
         if (d) {
-            struct dirent *ent;
-            while ((ent = readdir(d)) != NULL) {
-                size_t nl = strlen(ent->d_name);
-                if (nl > 10 && strcmp(ent->d_name + nl - 10, ".kicad_pro") == 0) {
-                    closedir(d);
+            const char *name;
+            while ((name = kicli_readdir(d)) != NULL) {
+                size_t nl = strlen(name);
+                if (nl > 10 && strcmp(name + nl - 10, ".kicad_pro") == 0) {
+                    kicli_closedir(d);
                     snprintf(out, outsz, "%s", dir);
                     return 0;
                 }
             }
-            closedir(d);
+            kicli_closedir(d);
         }
-#endif
         /* go up one level */
-        char *sep = strrchr(dir, PATH_SEP);
+        char *sep = strrchr(dir, KICLI_PATH_SEP);
         if (!sep) break;
         *sep = '\0';
     }
@@ -199,24 +163,20 @@ static int has_suffix(const char *name, const char *suffix)
     return strcmp(name + nl - sl, suffix) == 0;
 }
 
-#ifndef _WIN32
 static void discover_recursive(const char *dir, discovered_t *d, int in_kicad_dir)
 {
-    DIR *dp = opendir(dir);
+    kicli_dir_t *dp = kicli_opendir(dir);
     if (!dp) return;
 
-    struct dirent *ent;
-    while ((ent = readdir(dp)) != NULL) {
-        if (ent->d_name[0] == '.') continue;
+    const char *name;
+    while ((name = kicli_readdir(dp)) != NULL) {
+        if (name[0] == '.') continue;
 
         char path[1024];
-        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        snprintf(path, sizeof(path), "%s%c%s", dir, KICLI_PATH_SEP, name);
 
-        struct stat st;
-        if (stat(path, &st) != 0) continue;
-
-        if (S_ISDIR(st.st_mode)) {
-            int is_kicad = (strcmp(ent->d_name, "KiCad") == 0);
+        if (kicli_is_dir(path)) {
+            int is_kicad = (strcmp(name, "KiCad") == 0);
             discover_recursive(path, d, in_kicad_dir || is_kicad);
             continue;
         }
@@ -225,78 +185,30 @@ static void discover_recursive(const char *dir, discovered_t *d, int in_kicad_di
         int dominated = (!in_kicad_dir && d->symbol[0] && d->footprint[0]);
         if (dominated) continue;
 
-        if (!d->symbol[0] && has_suffix(ent->d_name, ".kicad_sym"))
+        if (!d->symbol[0] && has_suffix(name, ".kicad_sym"))
             snprintf(d->symbol, sizeof(d->symbol), "%s", path);
-        else if (!d->legacy_sym[0] && has_suffix(ent->d_name, ".lib"))
+        else if (!d->legacy_sym[0] && has_suffix(name, ".lib"))
             snprintf(d->legacy_sym, sizeof(d->legacy_sym), "%s", path);
 
-        if (!d->footprint[0] && has_suffix(ent->d_name, ".kicad_mod"))
+        if (!d->footprint[0] && has_suffix(name, ".kicad_mod"))
             snprintf(d->footprint, sizeof(d->footprint), "%s", path);
 
-        if (!d->model3d[0] && (has_suffix(ent->d_name, ".stp") ||
-                                has_suffix(ent->d_name, ".step") ||
-                                has_suffix(ent->d_name, ".STEP") ||
-                                has_suffix(ent->d_name, ".STP")))
+        if (!d->model3d[0] && (has_suffix(name, ".stp") ||
+                                has_suffix(name, ".step") ||
+                                has_suffix(name, ".STEP") ||
+                                has_suffix(name, ".STP")))
             snprintf(d->model3d, sizeof(d->model3d), "%s", path);
 
         /* if we found items in KiCad dir, overwrite non-KiCad findings */
         if (in_kicad_dir) {
-            if (has_suffix(ent->d_name, ".kicad_sym"))
+            if (has_suffix(name, ".kicad_sym"))
                 snprintf(d->symbol, sizeof(d->symbol), "%s", path);
-            if (has_suffix(ent->d_name, ".kicad_mod"))
+            if (has_suffix(name, ".kicad_mod"))
                 snprintf(d->footprint, sizeof(d->footprint), "%s", path);
         }
     }
-    closedir(dp);
+    kicli_closedir(dp);
 }
-#else
-static void discover_recursive(const char *dir, discovered_t *d, int in_kicad_dir)
-{
-    char pattern[1024];
-    snprintf(pattern, sizeof(pattern), "%s\\*", dir);
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-
-    do {
-        if (fd.cFileName[0] == '.') continue;
-
-        char path[1024];
-        snprintf(path, sizeof(path), "%s\\%s", dir, fd.cFileName);
-
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            int is_kicad = (strcmp(fd.cFileName, "KiCad") == 0);
-            discover_recursive(path, d, in_kicad_dir || is_kicad);
-            continue;
-        }
-
-        int dominated = (!in_kicad_dir && d->symbol[0] && d->footprint[0]);
-        if (dominated) continue;
-
-        if (!d->symbol[0] && has_suffix(fd.cFileName, ".kicad_sym"))
-            snprintf(d->symbol, sizeof(d->symbol), "%s", path);
-        else if (!d->legacy_sym[0] && has_suffix(fd.cFileName, ".lib"))
-            snprintf(d->legacy_sym, sizeof(d->legacy_sym), "%s", path);
-
-        if (!d->footprint[0] && has_suffix(fd.cFileName, ".kicad_mod"))
-            snprintf(d->footprint, sizeof(d->footprint), "%s", path);
-
-        if (!d->model3d[0] && (has_suffix(fd.cFileName, ".stp") ||
-                                has_suffix(fd.cFileName, ".step") ||
-                                has_suffix(fd.cFileName, ".STEP") ||
-                                has_suffix(fd.cFileName, ".STP")))
-            snprintf(d->model3d, sizeof(d->model3d), "%s", path);
-
-        if (in_kicad_dir) {
-            if (has_suffix(fd.cFileName, ".kicad_sym"))
-                snprintf(d->symbol, sizeof(d->symbol), "%s", path);
-            if (has_suffix(fd.cFileName, ".kicad_mod"))
-                snprintf(d->footprint, sizeof(d->footprint), "%s", path);
-        }
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-}
-#endif
 
 /* ── Symbol import ──────────────────────────────────────────────────────── */
 
@@ -366,7 +278,7 @@ static int import_symbol(const char *sym_path, const char *proj_dir,
     /* Fix footprint references */
     fix_footprint_ref(src_root, lib_name, comp_name);
 
-    if (!file_exists(lib_path)) {
+    if (!kicli_exists(lib_path)) {
         /* New library — write the source directly */
         if (sexpr_write_file(src_root, lib_path) != 0) {
             fprintf(stderr, CLR_RED "error:" CLR_RESET
@@ -531,7 +443,7 @@ static int register_lib_table(const char *table_path, const char *lib_name,
                                const char *uri, const char *descr,
                                const char *table_tag)
 {
-    if (!file_exists(table_path)) {
+    if (!kicli_exists(table_path)) {
         /* Create new lib table */
         sexpr_t *root = sexpr_make_list();
         sexpr_list_append(root, sexpr_make_atom(table_tag));
@@ -583,19 +495,6 @@ static int register_lib_table(const char *table_path, const char *lib_name,
     return 0;
 }
 
-/* ── Cleanup temp dir ───────────────────────────────────────────────────── */
-
-static void rmdir_recursive(const char *dir)
-{
-    char cmd[2048];
-#ifdef _WIN32
-    snprintf(cmd, sizeof(cmd), "rmdir /s /q \"%s\" >nul 2>&1", dir);
-#else
-    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" 2>/dev/null", dir);
-#endif
-    system(cmd);
-}
-
 /* ── List imported libraries ────────────────────────────────────────────── */
 
 static int cmd_import_list(const char *proj_dir)
@@ -603,7 +502,7 @@ static int cmd_import_list(const char *proj_dir)
     char sym_table[1024];
     snprintf(sym_table, sizeof(sym_table), "%s/sym-lib-table", proj_dir);
 
-    if (!file_exists(sym_table)) {
+    if (!kicli_exists(sym_table)) {
         printf("No libraries imported yet.\n");
         return 0;
     }
@@ -697,14 +596,14 @@ int cmd_import(int argc, char **argv)
         return 1;
     }
 
-    if (!file_exists(zip_path)) {
+    if (!kicli_exists(zip_path)) {
         fprintf(stderr, CLR_RED "error:" CLR_RESET
                 " file not found: '%s'\n", zip_path);
         return 1;
     }
 
     /* Derive component name from zip filename */
-    const char *base = strrchr(zip_path, PATH_SEP);
+    const char *base = strrchr(zip_path, KICLI_PATH_SEP);
     if (!base) base = strrchr(zip_path, '/');  /* handle mixed separators */
     base = base ? base + 1 : zip_path;
 
@@ -757,7 +656,7 @@ int cmd_import(int argc, char **argv)
         fprintf(stderr, CLR_RED "error:" CLR_RESET
                 " no KiCad files found in ZIP\n");
         fprintf(stderr, "  Expected: .kicad_sym, .kicad_mod, .stp/.step\n");
-        rmdir_recursive(tmp_dir);
+        kicli_rmrf(tmp_dir);
         return 1;
     }
 
@@ -802,7 +701,7 @@ int cmd_import(int argc, char **argv)
     }
 
     /* Cleanup */
-    rmdir_recursive(tmp_dir);
+    kicli_rmrf(tmp_dir);
 
     /* Summary */
     printf("\n" CLR_GREEN CLR_BOLD "Done!" CLR_RESET " %s → %s",

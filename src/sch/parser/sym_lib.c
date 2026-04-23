@@ -9,17 +9,10 @@
 #include "kicli/sch.h"
 #include "kicli/error.h"
 #include "kicli/kicad_cli.h"
+#include "kicli/portable.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#  include <windows.h>
-#  define PATH_SEP '\\'
-#else
-#  include <sys/stat.h>
-#  define PATH_SEP '/'
-#endif
 
 /* ── Symbol library directory ─────────────────────────────────────────────── */
 
@@ -41,25 +34,25 @@ static void derive_sym_dir(const char *cli_path)
     snprintf(buf, sizeof(buf), "%s", cli_path);
 
     /* strip filename */
-    char *last = strrchr(buf, PATH_SEP);
+    char *last = strrchr(buf, KICLI_PATH_SEP);
     if (last) *last = '\0';
 
 #if defined(__APPLE__)
     /* buf is now .../Contents/MacOS */
-    last = strrchr(buf, PATH_SEP);
+    last = strrchr(buf, KICLI_PATH_SEP);
     if (last) *last = '\0'; /* .../Contents */
     snprintf(s_sym_dir, sizeof(s_sym_dir), "%s/SharedSupport/symbols", buf);
 
 #elif defined(_WIN32)
     /* buf is .../KiCad/bin */
-    last = strrchr(buf, PATH_SEP);
+    last = strrchr(buf, KICLI_PATH_SEP);
     if (last) *last = '\0'; /* .../KiCad */
     snprintf(s_sym_dir, sizeof(s_sym_dir),
              "%s\\share\\kicad\\symbols", buf);
 
 #else
     /* Linux: /usr/bin -> /usr/share/kicad/symbols */
-    last = strrchr(buf, PATH_SEP);
+    last = strrchr(buf, KICLI_PATH_SEP);
     if (last) *last = '\0'; /* /usr */
     snprintf(s_sym_dir, sizeof(s_sym_dir),
              "%s/share/kicad/symbols", buf);

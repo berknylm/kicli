@@ -3,17 +3,10 @@
  */
 
 #include "kicli/config.h"
+#include "kicli/portable.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#  include <direct.h>
-#  define MKDIR(p) _mkdir(p)
-#else
-#  include <sys/stat.h>
-#  define MKDIR(p) mkdir(p, 0755)
-#endif
 
 void kicli_config_path(char *out, size_t size)
 {
@@ -64,20 +57,13 @@ int kicli_config_save(const kicli_config_t *cfg)
     char path[KICLI_CONFIG_PATH_MAX];
     kicli_config_path(path, sizeof(path));
 
-    /* ensure parent dir exists */
+    /* ensure parent dir exists (and all missing ancestors) */
     char dir[KICLI_CONFIG_PATH_MAX];
     snprintf(dir, sizeof(dir), "%s", path);
-    char *last = strrchr(dir,
-#ifdef _WIN32
-        '\\'
-#else
-        '/'
-#endif
-    );
+    char *last = strrchr(dir, KICLI_PATH_SEP);
     if (last) {
         *last = '\0';
-        /* create grandparent (.config) then parent (kicli) */
-        MKDIR(dir); /* ok if exists */
+        kicli_mkdir_p(dir);
     }
 
     FILE *f = fopen(path, "w");

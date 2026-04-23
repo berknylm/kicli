@@ -2,19 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-
 #include <errno.h>
-#include <sys/stat.h>
-#ifdef _WIN32
-#  define strcasecmp _stricmp
-#  include <windows.h>
-#  ifndef S_ISDIR
-#    define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
-#  endif
-#else
-#  include <dirent.h>
-#endif
+
 #include <curl/curl.h>
+#include "kicli/portable.h"
 #include "kicli/jlcpcb.h"
 #include "kicli/sch.h"
 #include "kicli/error.h"
@@ -292,7 +283,7 @@ static const char *find_lcsc(const kicli_symbol_t *s)
     static const char *keys[] = { "LCSC", "lcsc", "JLC_PART", "JLCPCB#", NULL };
     for (int k = 0; keys[k]; k++) {
         for (size_t i = 0; i < s->num_properties; i++) {
-            if (strcasecmp(s->properties[i].key, keys[k]) == 0)
+            if (kicli_strcasecmp(s->properties[i].key, keys[k]) == 0)
                 return s->properties[i].value ? s->properties[i].value : "";
         }
     }
@@ -379,40 +370,23 @@ static int jlcpcb_bom(const char *path, const char *out_path)
     kicli_schematic_t **to_free = NULL;
     size_t free_count = 0, free_cap = 0;
 
-    struct stat st;
-    if (stat(path, &st) != 0) {
+    if (!kicli_exists(path)) {
         fprintf(stderr, "error: cannot stat '%s': %s\n", path, strerror(errno));
         return 1;
     }
 
-    if (S_ISDIR(st.st_mode)) {
-        /* scan directory for *.kicad_sch */
-#ifdef _WIN32
-        char pattern[1024];
-        snprintf(pattern, sizeof(pattern), "%s\\*.kicad_sch", path);
-        WIN32_FIND_DATAA fd;
-        HANDLE hFind = FindFirstFileA(pattern, &fd);
-        if (hFind != INVALID_HANDLE_VALUE) {
-            do {
-                char fpath[1024];
-                snprintf(fpath, sizeof(fpath), "%s\\%s", path, fd.cFileName);
-                bom_load_file(fpath, &all, &count, &cap, &to_free, &free_count, &free_cap);
-            } while (FindNextFileA(hFind, &fd));
-            FindClose(hFind);
-        }
-#else
-        DIR *dir = opendir(path);
+    if (kicli_is_dir(path)) {
+        kicli_dir_t *dir = kicli_opendir(path);
         if (!dir) { fprintf(stderr, "error: cannot open dir '%s'\n", path); return 1; }
-        struct dirent *ent;
-        while ((ent = readdir(dir)) != NULL) {
-            size_t nl = strlen(ent->d_name);
-            if (nl < 10 || strcmp(ent->d_name + nl - 10, ".kicad_sch") != 0) continue;
+        const char *name;
+        while ((name = kicli_readdir(dir)) != NULL) {
+            size_t nl = strlen(name);
+            if (nl < 10 || strcmp(name + nl - 10, ".kicad_sch") != 0) continue;
             char fpath[1024];
-            snprintf(fpath, sizeof(fpath), "%s/%s", path, ent->d_name);
+            snprintf(fpath, sizeof(fpath), "%s%c%s", path, KICLI_PATH_SEP, name);
             bom_load_file(fpath, &all, &count, &cap, &to_free, &free_count, &free_cap);
         }
-        closedir(dir);
-#endif
+        kicli_closedir(dir);
     } else {
         bom_load_file(path, &all, &count, &cap, &to_free, &free_count, &free_cap);
     }

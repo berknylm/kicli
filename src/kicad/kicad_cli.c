@@ -15,17 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#  include <windows.h>
-#  include <io.h>
-#  define popen  _popen
-#  define pclose _pclose
-#  define F_OK   0
-#  define access _access
-#else
-#  include <unistd.h>
-#endif
-
+#include "kicli/portable.h"
 #include "kicli/kicad_cli.h"
 #include "kicli/config.h"
 #include "kicli/error.h"
@@ -72,7 +62,7 @@ static int find_in_path(char *out)
 
         char candidate[KICAD_CLI_MAX_PATH];
         snprintf(candidate, sizeof(candidate), "%s/%s", dir, exe);
-        if (access(candidate, F_OK) == 0) {
+        if (kicli_exists(candidate)) {
             snprintf(out, KICAD_CLI_MAX_PATH, "%s", candidate);
             return 1;
         }
@@ -94,7 +84,7 @@ kicli_err_t kicad_cli_find(char *out)
 
     /* 1. Env var override */
     const char *env = getenv("KICAD_CLI_PATH");
-    if (env && access(env, F_OK) == 0) {
+    if (env && kicli_exists(env)) {
         snprintf(s_path, sizeof(s_path), "%s", env);
         snprintf(out, KICAD_CLI_MAX_PATH, "%s", s_path);
         return KICLI_OK;
@@ -103,7 +93,7 @@ kicli_err_t kicad_cli_find(char *out)
     /* 2. Saved config */
     kicli_config_t cfg;
     kicli_config_load(&cfg);
-    if (cfg.kicad_path[0] && access(cfg.kicad_path, F_OK) == 0) {
+    if (cfg.kicad_path[0] && kicli_exists(cfg.kicad_path)) {
         snprintf(s_path, sizeof(s_path), "%s", cfg.kicad_path);
         snprintf(out, KICAD_CLI_MAX_PATH, "%s", s_path);
         return KICLI_OK;
@@ -111,7 +101,7 @@ kicli_err_t kicad_cli_find(char *out)
 
     /* 3. Platform defaults */
     for (int i = 0; default_paths[i]; i++) {
-        if (access(default_paths[i], F_OK) == 0) {
+        if (kicli_exists(default_paths[i])) {
             snprintf(s_path, sizeof(s_path), "%s", default_paths[i]);
             snprintf(out, KICAD_CLI_MAX_PATH, "%s", s_path);
             /* save so next run is instant */
@@ -144,7 +134,7 @@ kicli_err_t kicad_cli_set_path(const char *path)
         kicli_set_error("path cannot be empty");
         return KICLI_ERR_INVALID_ARG;
     }
-    if (access(path, F_OK) != 0) {
+    if (!kicli_exists(path)) {
         kicli_set_error("'%s' does not exist", path);
         return KICLI_ERR_NOT_FOUND;
     }
@@ -214,31 +204,28 @@ kicli_err_t kicad_cli_capture(const char *const *args, char **output)
 
 #ifdef _WIN32
     /* Windows: popen doesn't work well with quoted paths; use temp file */
-    char tmp[MAX_PATH + 64];
-    char dir[MAX_PATH];
-    GetTempPathA(MAX_PATH, dir);
-    snprintf(tmp, sizeof(tmp), "%skicli_cap_%lu.txt",
-             dir, (unsigned long)GetCurrentProcessId());
+    char tmp[KICLI_PATH_MAX];
+    kicli_temp_path(tmp, sizeof(tmp), "cap", "txt");
 
     char cmd2[4096];
     snprintf(cmd2, sizeof(cmd2), "\"%s >\"%s\" 2>nul\"", cmd, tmp);
     free(cmd);
 
     if (system(cmd2) != 0) {
-        DeleteFileA(tmp);
+        kicli_unlink(tmp);
         kicli_set_error("kicad-cli failed");
         return KICLI_ERR_SUBPROCESS;
     }
 
     FILE *tf = fopen(tmp, "rb");
-    if (!tf) { DeleteFileA(tmp); kicli_set_error("cannot read output"); return KICLI_ERR_IO; }
+    if (!tf) { kicli_unlink(tmp); kicli_set_error("cannot read output"); return KICLI_ERR_IO; }
     fseek(tf, 0, SEEK_END);
     long sz = ftell(tf); rewind(tf);
     char *buf = malloc((size_t)(sz < 0 ? 1 : sz + 1));
-    if (!buf) { fclose(tf); DeleteFileA(tmp); return KICLI_ERR_OOM; }
+    if (!buf) { fclose(tf); kicli_unlink(tmp); return KICLI_ERR_OOM; }
     size_t n = (sz > 0) ? fread(buf, 1, (size_t)sz, tf) : 0;
     buf[n] = '\0';
-    fclose(tf); DeleteFileA(tmp);
+    fclose(tf); kicli_unlink(tmp);
     *output = buf;
     return KICLI_OK;
 

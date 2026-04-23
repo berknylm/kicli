@@ -30,17 +30,7 @@
 #include <ctype.h>
 #include <math.h>
 
-#ifdef _WIN32
-#  include <windows.h>
-#  include <io.h>
-#  define unlink   _unlink
-#  define getpid   GetCurrentProcessId
-#  define F_OK     0
-#  define access   _access
-#else
-#  include <unistd.h>
-#endif
-
+#include "kicli/portable.h"
 #include "kicli/sch.h"
 #include "kicli/kicad_cli.h"
 #include "kicli/error.h"
@@ -741,15 +731,8 @@ int cmd_sch_view(const char *sch_path, int argc, char **argv)
     }
 
     /* ── Pass 2: kicad-cli netlist → labeled nets ─────────────────────── */
-    char tmp[512];
-#ifdef _WIN32
-    char tmpdir[MAX_PATH];
-    GetTempPathA(MAX_PATH, tmpdir);
-    snprintf(tmp, sizeof(tmp), "%skicli_nl_%lu.net",
-             tmpdir, (unsigned long)GetCurrentProcessId());
-#else
-    snprintf(tmp, sizeof(tmp), "/tmp/kicli_nl_%d.net", (int)getpid());
-#endif
+    char tmp[KICLI_PATH_MAX];
+    kicli_temp_path(tmp, sizeof(tmp), "nl", "net");
 
     const char *nl_args[] = {
         "sch", "export", "netlist",
@@ -762,10 +745,10 @@ int cmd_sch_view(const char *sch_path, int argc, char **argv)
     kicli_err_t err = kicad_cli_run(nl_args);
     if (err == KICLI_OK) {
         parse_netlist_nets(tmp, &nmap);
-        unlink(tmp);
+        kicli_unlink(tmp);
     } else {
         fprintf(stderr, "warning: kicad-cli netlist failed — nets may be incomplete\n");
-        unlink(tmp);
+        kicli_unlink(tmp);
     }
 
     /* ── Sort placed symbols ──────────────────────────────────────────── */
