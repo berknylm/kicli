@@ -61,6 +61,17 @@ Pre-built binaries: [Releases](https://github.com/berknylm/kicli/releases/latest
 
 > Requires **KiCad 10** for export/erc commands — [kicad.org/download](https://www.kicad.org/download/)
 
+### Claude Code plugin
+
+First-class integration with Claude Code (`/kicli:review`, `/kicli:bom`, `/kicli:search`, `/kicli:import`, `/kicli:new`):
+
+```
+/plugin marketplace add github:berknylm/kicli-plugin
+/plugin install kicli@kicli-marketplace
+```
+
+Plugin repo: [github.com/berknylm/kicli-plugin](https://github.com/berknylm/kicli-plugin)
+
 ---
 
 ## Commands
