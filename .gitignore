@@ -23,3 +23,5 @@ fp-info-cache
 *.swp
 Sample-BOM_JLCSMT.xlsx
 STRATEGY.md
+# Local research notes — not shipped
+kicad_reference/
