@@ -15,6 +15,9 @@
 /* forward declarations */
 int cmd_sch_view   (const char *sch_path, int argc, char **argv);
 int cmd_sch_view_dir(const char *dir, int argc, char **argv);
+int cmd_sch_info_pins(const char *sch_path, const char *ref,
+                       const char *netlist_override, const char *sheet_label);
+int find_root_sch  (const char *dir, char *out, size_t outsz);
 int cmd_sch_set    (const char *sch_path, const char *ref, const char *field, const char *value);
 int cmd_sch_set_all(const char *path, int argc, char **argv);
 
@@ -69,33 +72,13 @@ static int cmd_sch_list_prefixed(const kicli_schematic_t *sch, int show_all,
 
 /* ── info ────────────────────────────────────────────────────────────────── */
 
-static const char *pin_type_str(kicli_pin_type_t t)
-{
-    switch (t) {
-        case PIN_INPUT:       return "in";
-        case PIN_OUTPUT:      return "out";
-        case PIN_BIDI:        return "inout";
-        case PIN_TRISTATE:    return "tri";
-        case PIN_PASSIVE:     return "pass";
-        case PIN_POWER_IN:    return "pwrin";
-        case PIN_POWER_OUT:   return "pwrout";
-        case PIN_OPEN_COLL:   return "oc";
-        case PIN_OPEN_EMIT:   return "oe";
-        case PIN_NO_CONNECT:  return "nc";
-        case PIN_UNSPECIFIED: return "-";
-    }
-    return "-";
-}
-
-static int cmd_sch_info(kicli_schematic_t *sch, const char *ref, int show_pins)
+/* Print the static-property block of info (no pin table). */
+static int cmd_sch_info_static(kicli_schematic_t *sch, const char *ref,
+                                int want_pins_note)
 {
     const kicli_symbol_t *s = kicli_sch_symbol_by_ref(sch, ref);
 
-    if (!s) {
-        fprintf(stderr, CLR_RED "error:" CLR_RESET
-                " component '%s' not found\n", ref);
-        return 2;
-    }
+    if (!s) return 2;  /* caller prints the "not found" message */
 
     printf("%s\n", s->reference);
     printf("  lib_id:     %s\n", s->lib_id);
@@ -120,34 +103,10 @@ static int cmd_sch_info(kicli_schematic_t *sch, const char *ref, int show_pins)
         }
     }
 
-    if (s->num_pins > 0) {
-        if (show_pins) {
-            printf("\n  Pins: %zu\n", s->num_pins);
-            kicli_lib_symbol_t *lib =
-                kicli_sch_find_lib_symbol(sch, s->lib_id);
-            printf("    %-8s  %-24s  %-8s  %s\n", "NUM", "NAME", "TYPE", "NET");
-            for (size_t j = 0; j < s->num_pins; j++) {
-                const kicli_pin_ref_t *pr = &s->pins[j];
-                /* Look up the library pin by number for name/type. */
-                const char *name = "";
-                const char *type = "-";
-                if (lib) {
-                    for (size_t k = 0; k < lib->num_pins; k++) {
-                        if (strcmp(lib->pins[k].number, pr->number) == 0) {
-                            name = lib->pins[k].name;
-                            type = pin_type_str(lib->pins[k].pin_type);
-                            break;
-                        }
-                    }
-                }
-                printf("    %-8s  %-24s  %-8s  %s\n",
-                       pr->number, name, type,
-                       pr->net[0] ? pr->net : "~");
-            }
-        } else {
-            printf("\n  Pins: %zu  (use --pins to list)\n", s->num_pins);
-        }
-    }
+    if (s->num_pins > 0 && want_pins_note)
+        printf("\n  Pins: %zu  (use --pins to list)\n", s->num_pins);
+    else if (s->num_pins > 0)
+        printf("\n  Pins: %zu\n", s->num_pins);
 
     return 0;
 }
@@ -202,22 +161,33 @@ static int cmd_sch_export(const char *sch_path, int argc, char **argv)
 static int cmd_sch_erc(const char *sch_path, int argc, char **argv)
 {
     const char *output = NULL;
+    const char *format = NULL;
     for (int i = 0; i < argc - 1; i++) {
         if (strcmp(argv[i], "--output") == 0 || strcmp(argv[i], "-o") == 0)
             output = argv[i + 1];
+        else if (strcmp(argv[i], "--format") == 0)
+            format = argv[i + 1];
     }
 
-    /* -o - (or --output -) means stream the report to stdout without
-     * the "Found N violations / Saved ERC Report to ..." chatter that
-     * kicad-cli normally prints. Capture kicad-cli's stdout into a
-     * discard buffer; the actual report goes to our temp file. */
-    if (output && strcmp(output, "-") == 0) {
+    /* Stream to stdout (-o -) and/or specific formats.
+     * kicad-cli accepts --format report (default) | json. */
+    int use_json = format && strcmp(format, "json") == 0;
+    int stream_to_stdout = output && strcmp(output, "-") == 0;
+    if (format && !use_json && strcmp(format, "report") != 0) {
+        fprintf(stderr, CLR_RED "error:" CLR_RESET
+                " --format must be 'report' or 'json'\n");
+        return 1;
+    }
+
+    if (stream_to_stdout) {
         char tmp[KICLI_PATH_MAX];
-        kicli_temp_path(tmp, sizeof(tmp), "erc", "rpt");
-        const char *args[8];
+        kicli_temp_path(tmp, sizeof(tmp), "erc",
+                        use_json ? "json" : "rpt");
+        const char *args[12];
         int n = 0;
         args[n++] = "sch"; args[n++] = "erc";
         args[n++] = "--output"; args[n++] = tmp;
+        if (use_json) { args[n++] = "--format"; args[n++] = "json"; }
         args[n++] = sch_path;
         args[n]   = NULL;
 
@@ -239,11 +209,12 @@ static int cmd_sch_erc(const char *sch_path, int argc, char **argv)
         return (rc == KICLI_OK) ? 0 : 1;
     }
 
-    const char *args[8];
+    const char *args[12];
     int n = 0;
     args[n++] = "sch";
     args[n++] = "erc";
     if (output) { args[n++] = "--output"; args[n++] = output; }
+    if (use_json) { args[n++] = "--format"; args[n++] = "json"; }
     args[n++] = sch_path;
     args[n]   = NULL;
 
@@ -284,7 +255,9 @@ static int run_list_on_file(const char *file, int show_all,
     return ret;
 }
 
-static int run_info_on_file(const char *file, const char *ref, int show_pins)
+static int run_info_on_file(const char *file, const char *ref, int show_pins,
+                              const char *netlist_override,
+                              const char *sheet_label)
 {
     kicli_schematic_t *sch = NULL;
     kicli_err_t rc = kicli_sch_read(file, &sch);
@@ -293,12 +266,26 @@ static int run_info_on_file(const char *file, const char *ref, int show_pins)
                 file, kicli_last_error());
         return (rc == KICLI_ERR_IO) ? 3 : 4;
     }
-    /* On "not found", return 2 — but info across a dir should keep searching. */
     kicli_symbol_t *s = kicli_sch_symbol_by_ref(sch, ref);
-    int ret = 2;
-    if (s) ret = cmd_sch_info(sch, ref, show_pins);
+    if (!s) {
+        kicli_sch_free(sch);
+        return 2;  /* caller retries on next sheet in dir mode */
+    }
+
+    /* Static properties come from the sch_read parser. */
+    int static_rc = cmd_sch_info_static(sch, ref, /*want_pins_note=*/ !show_pins);
     kicli_sch_free(sch);
-    return ret;
+    if (static_rc != 0) return static_rc;
+
+    /* Full pin table (with names, types, nets) goes through the same view
+     * pipeline that `view` uses — the sch parser's lib_symbols bucket is
+     * empty and net info is also missing there. */
+    if (show_pins) {
+        printf("\n");
+        int pins_rc = cmd_sch_info_pins(file, ref, netlist_override, sheet_label);
+        if (pins_rc != 0) return pins_rc;
+    }
+    return 0;
 }
 
 int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
@@ -313,10 +300,13 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
         printf("                            On a directory: adds 6th column SHEET\n");
         printf("  info <REF> [--pins]       All properties + PartNo status\n");
         printf("                            --pins adds the full pin table (NUM NAME TYPE NET)\n");
-        printf("  view [-o FILE]            Full pin+net connectivity table\n");
+        printf("  view [-o FILE] [--net NET]\n");
+        printf("                            Full pin+net connectivity table.\n");
         printf("                            On a directory: walks all .kicad_sch, unified net\n");
         printf("                            names via the root schematic's netlist (resolved\n");
-        printf("                            across sheet pins ↔ hierarchical labels)\n");
+        printf("                            across sheet pins ↔ hierarchical labels).\n");
+        printf("                            --net NET prints a flat REF:PIN/NAME/TYPE table for\n");
+        printf("                            every pin connected to NET (append SHEET on dir).\n");
         printf("\nWrite:\n");
         printf("  set <REF> <FIELD> <VALUE>                          One file only.\n");
         printf("    e.g. kicli sch board.kicad_sch set R1 LCSC C25744\n");
@@ -325,7 +315,9 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
         printf("    e.g. kicli sch proj/ set-all \"LED\" LCSC C2286 --footprint \"*0603*\"\n");
         printf("\nExport (kicad-cli passthrough, single file only):\n");
         printf("  export pdf|svg|netlist|bom [-o FILE]\n");
-        printf("  erc [-o FILE|-]           Electrical rules check (-o - streams to stdout)\n");
+        printf("  erc [-o FILE|-] [--format report|json]\n");
+        printf("                            Electrical rules check. -o - streams to stdout;\n");
+        printf("                            --format json emits machine-parseable JSON.\n");
         return 0;
     }
 
@@ -430,13 +422,36 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
             if (strcmp(argv[i], "--pins") == 0) { show_pins = 1; break; }
 
         if (!is_dir)
-            return run_info_on_file(sch_path, ref, show_pins);
+            return run_info_on_file(sch_path, ref, show_pins, NULL, NULL);
 
-        /* Directory mode: search all .kicad_sch, stop at first match. */
+        /* Directory mode: search all .kicad_sch, stop at first match.
+         * Generate a root-wide netlist once so --pins can resolve NET names
+         * just like `view` does across sheets. */
+        char nl_tmp[KICLI_PATH_MAX] = {0};
+        const char *nl_override = NULL;
+        if (show_pins) {
+            char root_path[KICLI_PATH_MAX];
+            if (find_root_sch(sch_path, root_path, sizeof(root_path)) == 0) {
+                kicli_temp_path(nl_tmp, sizeof(nl_tmp), "nl", "net");
+                const char *nl_args[] = {
+                    "sch", "export", "netlist",
+                    "--format", "kicadsexpr",
+                    "--output", nl_tmp,
+                    root_path, NULL
+                };
+                if (kicad_cli_run(nl_args) == KICLI_OK) {
+                    nl_override = nl_tmp;
+                } else {
+                    kicli_unlink(nl_tmp);
+                }
+            }
+        }
+
         kicli_dir_t *d = kicli_opendir(sch_path);
         if (!d) {
             fprintf(stderr, CLR_RED "error:" CLR_RESET
                     " cannot open dir '%s'\n", sch_path);
+            if (nl_override) kicli_unlink(nl_tmp);
             return 3;
         }
         const char *name;
@@ -446,14 +461,18 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
             if (nl < 10 || strcmp(name + nl - 10, ".kicad_sch") != 0) continue;
             char file[KICLI_PATH_MAX];
             snprintf(file, sizeof(file), "%s%c%s", sch_path, KICLI_PATH_SEP, name);
-            int rc = run_info_on_file(file, ref, show_pins);
+            char label[256];
+            sheet_label_from_path(label, sizeof(label), name);
+            int rc = run_info_on_file(file, ref, show_pins, nl_override, label);
             if (rc != 2) { /* 2 = not found on this sheet; keep looking */
                 kicli_closedir(d);
+                if (nl_override) kicli_unlink(nl_tmp);
                 return rc;
             }
             found = 1;
         }
         kicli_closedir(d);
+        if (nl_override) kicli_unlink(nl_tmp);
         if (!found) {
             fprintf(stderr, CLR_RED "error:" CLR_RESET
                     " no .kicad_sch files in '%s'\n", sch_path);

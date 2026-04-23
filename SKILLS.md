@@ -14,17 +14,26 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
                                         (NUM \t NAME \t TYPE \t NET).
                                         With a directory, walks every sheet
                                         and stops at the first match.
-  kicli sch <file|dir> view [-o FILE]   Full pin+net connectivity table.
+  kicli sch <file|dir> view [-o FILE] [--net NET]
+                                        Full pin+net connectivity table.
                                         With a dir: walks every .kicad_sch
                                         and resolves net names across sheets
                                         via the root schematic's netlist
                                         (sheet pins ↔ hierarchical labels
                                         bridge correctly — e.g. child's P3V3
                                         shows as parent's +3.3V).
+                                        --net NET prints a flat table of every
+                                        pin connected to NET: REF:PIN\tNAME\t
+                                        TYPE[\tSHEET]. Faster + pin-type aware
+                                        than greping the full view.
   kicli sch <file> set <REF> <FIELD> <VALUE>
   kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--dry-run]
   kicli sch <file> export pdf|svg|netlist|bom [-o FILE]
-  kicli sch <file> erc [-o FILE|-]      Use -o - to stream the report to stdout
+  kicli sch <file> erc [-o FILE|-] [--format report|json]
+                                        Use -o - to stream the report to stdout
+                                        --format json emits KiCad's structured
+                                        ERC JSON (https://schemas.kicad.org/erc.v1.json)
+                                        for parsing / filtering / counting
   kicli jlcpcb part <LCSC_ID>       Detail, stock, price, datasheet URL
   kicli jlcpcb search <query> [-n N] [--basic|--extended] [--in-stock] [--package PKG]
   kicli jlcpcb bom <file|dir> [-o CSV]  JLCPCB-ready BOM (merges all .kicad_sch in dir)
@@ -52,7 +61,8 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
   kicli sch project/ view | grep '→ ~'
 
   # every pin on a specific net, across every sheet
-  kicli sch project/ view | grep '→ +3.3V'
+  kicli sch project/ view --net +3.3V          # flat table with pin types
+  kicli sch project/ view | grep '→ +3.3V'      # quick grep alternative
 
   # all power pins of U1 (single-sheet query still works)
   kicli sch board.kicad_sch view | grep '^U1:' | grep 'pwrin'
@@ -68,6 +78,9 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
 
   # stream ERC report to stdout for piping
   kicli sch board.kicad_sch erc -o - | grep -E '^\[|violations'
+
+  # structured ERC output for programmatic parsing
+  kicli sch board.kicad_sch erc -o - --format json | jq '.sheets[].violations[]'
 
 ## BOM recipes
 

@@ -717,10 +717,23 @@ static void write_kisch(FILE *f, const char *sch_path,
  *   sheet_label          — optional short label (stem of filename) to tag
  *                          component blocks with when aggregating across
  *                          a multi-sheet project.
+ *   opts (optional)      — alternate render mode:
+ *                            opts.filter_ref  = print info-pins table for ref
+ *                            opts.filter_net  = print all pins whose net matches
+ *                                               this exact string
+ *                          If both fields are NULL/empty, full view is written.
  */
+typedef struct {
+    const char *filter_ref;  /* only dump this ref's pins (info --pins) */
+    const char *filter_net;  /* only dump pins whose net equals this */
+    int         header_done; /* caller toggles to 1 after first header */
+    int         matched;     /* worker sets to 1 if anything matched */
+} view_opts_t;
+
 static int view_render(const char *sch_path, FILE *fp_out,
                         const char *netlist_override,
-                        const char *sheet_label)
+                        const char *sheet_label,
+                        view_opts_t *opts)
 {
     /* ── Pass 1: parse .kicad_sch ─────────────────────────────────────── */
     lib_sym_def_t     *libs   = NULL; size_t lib_count = 0;
@@ -915,8 +928,67 @@ static int view_render(const char *sch_path, FILE *fp_out,
 
     free(uf_nodes);
 
-    write_kisch(fp_out, sch_path, sheet_label, comps, comp_count,
-                sheets, sheet_count, hlbls, hlbl_count);
+    /* ── Render: full view, info-for-ref, or net-filter ─────────────────── */
+    if (opts && opts->filter_ref && opts->filter_ref[0]) {
+        /* Info-pins mode: dump only this ref's pins in a flat table. */
+        for (size_t i = 0; i < comp_count; i++) {
+            if (strcmp(comps[i].ref, opts->filter_ref) != 0) continue;
+            opts->matched = 1;
+            if (sheet_label && sheet_label[0])
+                fprintf(fp_out, "# %s (sheet: %s)\n",
+                        comps[i].ref, sheet_label);
+            else
+                fprintf(fp_out, "# %s\n", comps[i].ref);
+            fprintf(fp_out, "%-8s\t%-24s\t%-8s\t%s\n",
+                    "NUM", "NAME", "TYPE", "NET");
+            for (size_t j = 0; j < comps[i].num_pins; j++) {
+                const dump_pin_t *p = &comps[i].pins[j];
+                fprintf(fp_out, "%-8s\t%-24s\t%-8s\t%s\n",
+                        p->num,
+                        p->name[0] ? p->name : "~",
+                        short_type(p->type),
+                        p->net);
+            }
+            break;
+        }
+    } else if (opts && opts->filter_net && opts->filter_net[0]) {
+        /* Net-filter mode: list every pin on the given net. */
+        if (!opts->header_done) {
+            fprintf(fp_out, "# pins on net: %s\n", opts->filter_net);
+            if (sheet_label && sheet_label[0])
+                fprintf(fp_out, "%-24s\t%-24s\t%-8s\t%s\n",
+                        "REF:PIN", "NAME", "TYPE", "SHEET");
+            else
+                fprintf(fp_out, "%-24s\t%-24s\t%s\n",
+                        "REF:PIN", "NAME", "TYPE");
+            opts->header_done = 1;
+        }
+        for (size_t i = 0; i < comp_count; i++) {
+            for (size_t j = 0; j < comps[i].num_pins; j++) {
+                const dump_pin_t *p = &comps[i].pins[j];
+                if (strcmp(p->net, opts->filter_net) != 0) continue;
+                opts->matched = 1;
+                char refpin[96];
+                snprintf(refpin, sizeof(refpin), "%s:%s",
+                         comps[i].ref, p->num);
+                if (sheet_label && sheet_label[0])
+                    fprintf(fp_out, "%-24s\t%-24s\t%-8s\t%s\n",
+                            refpin,
+                            p->name[0] ? p->name : "~",
+                            short_type(p->type),
+                            sheet_label);
+                else
+                    fprintf(fp_out, "%-24s\t%-24s\t%s\n",
+                            refpin,
+                            p->name[0] ? p->name : "~",
+                            short_type(p->type));
+            }
+        }
+    } else {
+        /* Default: full view. */
+        write_kisch(fp_out, sch_path, sheet_label, comps, comp_count,
+                    sheets, sheet_count, hlbls, hlbl_count);
+    }
 
     net_map_free(&nmap);
     for (size_t i = 0; i < lib_count; i++) free(libs[i].pins);
@@ -943,11 +1015,15 @@ oom:
 
 int cmd_sch_view(const char *sch_path, int argc, char **argv)
 {
-    const char *outfile = NULL;
+    const char *outfile   = NULL;
+    const char *filter_net = NULL;
     for (int i = 0; i < argc; i++) {
         if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0)
-            && i + 1 < argc)
-            outfile = argv[i + 1];
+            && i + 1 < argc) {
+            outfile = argv[i + 1]; i++;
+        } else if (strcmp(argv[i], "--net") == 0 && i + 1 < argc) {
+            filter_net = argv[i + 1]; i++;
+        }
     }
 
     FILE *fp = stdout;
@@ -959,20 +1035,38 @@ int cmd_sch_view(const char *sch_path, int argc, char **argv)
         }
     }
 
-    int rc = view_render(sch_path, fp, NULL, NULL);
+    view_opts_t opts = { .filter_net = filter_net };
+    int rc = view_render(sch_path, fp, NULL, NULL, &opts);
+
+    if (filter_net && !opts.matched && rc == 0)
+        fprintf(stderr, "no pins found on net '%s'\n", filter_net);
 
     if (outfile) {
         fclose(fp);
-        if (rc == 0) printf("wrote %s\n", outfile);
+        if (rc == 0 && !filter_net) printf("wrote %s\n", outfile);
     }
     return rc;
+}
+
+/* ── Public: info --pins, backed by the view pipeline ────────────────────── */
+/*
+ * Returns 0 if the ref was found + dumped, 2 if not found on this sheet,
+ * nonzero on parse/IO errors.
+ */
+int cmd_sch_info_pins(const char *sch_path, const char *ref,
+                       const char *netlist_override, const char *sheet_label)
+{
+    view_opts_t opts = { .filter_ref = ref };
+    int rc = view_render(sch_path, stdout, netlist_override, sheet_label, &opts);
+    if (rc != 0) return rc;
+    return opts.matched ? 0 : 2;
 }
 
 /* ── Public: cmd_sch_view_dir (multi-sheet project view) ─────────────────── */
 
 /* Find the root .kicad_sch by matching the <stem>.kicad_pro found in dir.
- * On success writes the full path to out and returns 0. */
-static int find_root_sch(const char *dir, char *out, size_t outsz)
+ * On success writes the full path to out and returns 0. Exposed to sch.c. */
+int find_root_sch(const char *dir, char *out, size_t outsz)
 {
     /* Iterate every .kicad_pro — a directory may contain multiple (e.g. a
      * separate PCB-only project). Pick the first one whose sibling
@@ -1013,11 +1107,15 @@ static void view_sheet_label(char *out, size_t outsz, const char *filename)
 
 int cmd_sch_view_dir(const char *dir, int argc, char **argv)
 {
-    const char *outfile = NULL;
+    const char *outfile    = NULL;
+    const char *filter_net = NULL;
     for (int i = 0; i < argc; i++) {
         if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0)
-            && i + 1 < argc)
-            outfile = argv[i + 1];
+            && i + 1 < argc) {
+            outfile = argv[i + 1]; i++;
+        } else if (strcmp(argv[i], "--net") == 0 && i + 1 < argc) {
+            filter_net = argv[i + 1]; i++;
+        }
     }
 
     /* Find root .kicad_sch; run kicad-cli netlist on it ONCE so that every
@@ -1060,17 +1158,19 @@ int cmd_sch_view_dir(const char *dir, int argc, char **argv)
         }
     }
 
-    fprintf(fp, "# project: %s\n", dir);
-    if (have_root) {
-        const char *rslash = strrchr(root_path, KICLI_PATH_SEP);
-        fprintf(fp, "# root:    %s\n",
-                rslash ? rslash + 1 : root_path);
+    if (!filter_net) {
+        fprintf(fp, "# project: %s\n", dir);
+        if (have_root) {
+            const char *rslash = strrchr(root_path, KICLI_PATH_SEP);
+            fprintf(fp, "# root:    %s\n",
+                    rslash ? rslash + 1 : root_path);
+        }
+        if (nl_override)
+            fprintf(fp, "# nets resolved across sheets via kicad-cli netlist\n");
+        else
+            fprintf(fp, "# nets are per-sheet only (root netlist unavailable)\n");
+        fprintf(fp, "\n");
     }
-    if (nl_override)
-        fprintf(fp, "# nets resolved across sheets via kicad-cli netlist\n");
-    else
-        fprintf(fp, "# nets are per-sheet only (root netlist unavailable)\n");
-    fprintf(fp, "\n");
 
     kicli_dir_t *d = kicli_opendir(dir);
     if (!d) {
@@ -1081,6 +1181,7 @@ int cmd_sch_view_dir(const char *dir, int argc, char **argv)
     }
 
     int any = 0, worst = 0;
+    view_opts_t shared_opts = { .filter_net = filter_net };
     const char *name;
     while ((name = kicli_readdir(d)) != NULL) {
         size_t nl = strlen(name);
@@ -1092,11 +1193,14 @@ int cmd_sch_view_dir(const char *dir, int argc, char **argv)
         char label[256];
         view_sheet_label(label, sizeof(label), name);
 
-        int rc = view_render(full, fp, nl_override, label);
+        int rc = view_render(full, fp, nl_override, label, &shared_opts);
         if (rc != 0 && rc > worst) worst = rc;
         any = 1;
     }
     kicli_closedir(d);
+
+    if (filter_net && !shared_opts.matched)
+        fprintf(stderr, "no pins found on net '%s'\n", filter_net);
 
     if (outfile) fclose(fp);
     if (nl_override) kicli_unlink(nl_tmp);
