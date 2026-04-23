@@ -66,7 +66,7 @@ Pre-built binaries: [Releases](https://github.com/berknylm/kicli/releases/latest
 First-class integration with Claude Code (`/kicli:review`, `/kicli:bom`, `/kicli:search`, `/kicli:import`, `/kicli:new`):
 
 ```
-/plugin marketplace add github:berknylm/kicli-plugin
+/plugin marketplace add berknylm/kicli-plugin
 /plugin install kicli@kicli-marketplace
 ```
 
