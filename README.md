@@ -188,9 +188,37 @@ Override kicad-cli path: `KICAD_CLI_PATH=/path/to/kicad-cli`
 ## Architecture
 
 - S-expression parser (`src/sch/parser/`) — reads KiCad 10 `.kicad_sch` files directly
-- 3-pass view engine (`src/sch/view.c`) — lib_symbols → kicad-cli netlist → union-find wire tracing
-- JLCPCB API (`src/jlcpcb/`) — component search, part lookup, BOM generation
+- 3-pass view engine (`src/sch/dump.c`) — lib_symbols → kicad-cli netlist → union-find wire tracing
+- Symbol + footprint catalog (`src/catalog/`) — indexes bundled KiCad libs + project-local libs
+- JLCPCB API (`src/jlcpcb/`) — component search, part lookup, BOM generation, `check` cross-check
 - No external dependencies beyond libcurl and a C11 compiler
+
+---
+
+## Release process
+
+kicli depends on two third-party surfaces that drift independently:
+
+1. KiCad's `.kicad_sch` format + `kicad-cli` subcommand behavior
+2. JLCPCB's parts API (URL + JSON shape)
+
+Before every release tag, run the compatibility gate:
+
+```bash
+cmake --build build/release
+scripts/compat-test.sh
+# → 24/24 assertions passed
+```
+
+The suite asserts:
+- `kicad-cli` is version 10.x, fresh `kicli new` schematic round-trips through `kicad-cli sch upgrade --force`
+- Symbol + footprint catalog finds bundled `Device:R` / `Resistor_SMD:R_0402_1005Metric` etc.
+- `sch erc -o - --format json` emits valid JSON, `stdout` has no Fontconfig leakage
+- `jlcpcb part C25744` response contains Brand / Model / Package / Count / Datasheet fields
+
+Add `--offline` to skip the JLCPCB tests when there's no network. Add `-v` to dump commands as they run. Point `KICLI_COMPAT_SCH=<file>` at a known real project to enable additional view-pipeline assertions.
+
+If any assertion fails, do not tag. Either the upstream changed (update kicli + the assertion) or kicli broke (fix before release).
 
 ---
 

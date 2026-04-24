@@ -178,7 +178,7 @@ static int glob_match(const char *pattern, const char *str)
 static int set_all_in_file(const char *sch_path,
                            const char *val_match, const char *fp_match,
                            const char *field, const char *new_val,
-                           int dry_run)
+                           int dry_run, int only_empty)
 {
     char *buf = read_file(sch_path);
     if (!buf) {
@@ -219,13 +219,19 @@ static int set_all_in_file(const char *sch_path,
         if (!sym_ref || sym_ref[0] == '#') continue; /* skip power */
         if (fp_match && !glob_match(fp_match, sym_fp ? sym_fp : "")) continue;
 
+        /* Existing value of the target field — needed for --only-empty. */
+        sexpr_t *prop = find_property_node(c, field);
+        const char *existing = (prop && prop->num_children >= 3 && prop->children[2]->value)
+                               ? prop->children[2]->value : "";
+
+        if (only_empty && existing[0]) continue;
+
         if (dry_run) {
             printf("  %s  %s.%s = %s (dry-run)\n", sch_path, sym_ref, field, new_val);
             changed++;
             continue;
         }
 
-        sexpr_t *prop = find_property_node(c, field);
         if (prop) {
             char *newval = strdup(new_val);
             if (!newval) { sexpr_free(root); return 0; }
@@ -252,10 +258,12 @@ static int set_all_in_file(const char *sch_path,
 
 int cmd_sch_set_all(const char *path, int argc, char **argv)
 {
-    /* parse: <VALUE_MATCH> <FIELD> <NEW_VALUE> [--footprint PAT] [--dry-run] */
+    /* parse: <VALUE_MATCH> <FIELD> <NEW_VALUE> [--footprint PAT] [--dry-run] [--only-empty] */
     if (argc < 3) {
         fprintf(stderr, "Usage: kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW_VALUE>\n");
         fprintf(stderr, "  --footprint <glob>   Only match components with this footprint\n");
+        fprintf(stderr, "  --only-empty         Only write when the target field is currently empty\n");
+        fprintf(stderr, "                       (useful for initial footprint / PartNo assignment)\n");
         fprintf(stderr, "  --dry-run            Preview changes without writing\n");
         return 1;
     }
@@ -265,12 +273,15 @@ int cmd_sch_set_all(const char *path, int argc, char **argv)
     const char *new_val   = argv[2];
     const char *fp_match  = NULL;
     int dry_run = 0;
+    int only_empty = 0;
 
     for (int i = 3; i < argc; i++) {
         if (strcmp(argv[i], "--footprint") == 0 && i + 1 < argc)
             fp_match = argv[++i];
         else if (strcmp(argv[i], "--dry-run") == 0)
             dry_run = 1;
+        else if (strcmp(argv[i], "--only-empty") == 0)
+            only_empty = 1;
     }
 
     if (!kicli_exists(path)) {
@@ -290,13 +301,13 @@ int cmd_sch_set_all(const char *path, int argc, char **argv)
             if (nl < 10 || strcmp(name + nl - 10, ".kicad_sch") != 0) continue;
             char fpath[1024];
             snprintf(fpath, sizeof(fpath), "%s%c%s", path, KICLI_PATH_SEP, name);
-            int rc = set_all_in_file(fpath, val_match, fp_match, field, new_val, dry_run);
+            int rc = set_all_in_file(fpath, val_match, fp_match, field, new_val, dry_run, only_empty);
             if (rc < 0) any_error = 1;
             else total += rc;
         }
         kicli_closedir(dir);
     } else {
-        int rc = set_all_in_file(path, val_match, fp_match, field, new_val, dry_run);
+        int rc = set_all_in_file(path, val_match, fp_match, field, new_val, dry_run, only_empty);
         if (rc < 0) return 3;
         total = rc;
     }

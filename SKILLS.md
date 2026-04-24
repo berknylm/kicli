@@ -27,8 +27,10 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
                                         TYPE[\tSHEET]. Faster + pin-type aware
                                         than greping the full view.
   kicli sch <file> set <REF> <FIELD> <VALUE>
-  kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--dry-run]
-  kicli sch <file> export pdf|svg|netlist|bom [-o FILE]
+  kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--only-empty] [--dry-run]
+                                        --only-empty writes only when the target field is currently empty
+                                         (useful for first-time Footprint / LCSC assignment)
+  kicli sch <file> export pdf|svg|netlist [-o FILE]        (BOM removed in v0.9.0 — use jlcpcb bom)
   kicli sch <file> erc [-o FILE|-] [--format report|json]
                                         Use -o - to stream the report to stdout
                                         --format json emits KiCad's structured
@@ -52,6 +54,15 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
                                         Crystal_SMD_3225-4Pin) independently.
   kicli import <file.zip> [-l LIB] [--project DIR]   Import vendor ZIP (symbol+footprint+3D)
   kicli import --list [--project DIR]                 List imported libraries
+
+  kicli sym search <q> [--pins N] [--lib L] [-n N]    Catalog symbol search; tab: lib:name\tpins\tdescription
+  kicli sym info <lib:name> [--pins]                  One symbol's metadata; --pins dumps NUM\tNAME\tTYPE
+  kicli sym list [lib]                                List all symbols, optionally restrict to one library
+  kicli fp  search <q> [--pads N] [--lib L] [-n N]    Catalog footprint search; tab: lib:name\tpads\ttags
+                                                      NOTE: pads = total pads INCLUDING thermal via splits
+                                                       on footprints with exposed pad; may exceed pin count
+  kicli fp  info <lib:name>                           One footprint's metadata + filesystem path
+  kicli fp  list [lib]                                List all footprints, optionally restrict to one library
 
 ## Schematic recipes
 

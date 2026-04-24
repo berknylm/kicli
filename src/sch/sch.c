@@ -117,7 +117,9 @@ static int cmd_sch_export(const char *sch_path, int argc, char **argv)
 {
     if (argc < 1) {
         fprintf(stderr, "Usage: kicli sch <file> export <format> [-o FILE]\n");
-        fprintf(stderr, "  formats: pdf, svg, netlist, bom\n");
+        fprintf(stderr, "  formats: pdf, svg, netlist\n");
+        fprintf(stderr, "  (BOM export removed in v0.9.0 — use 'kicli jlcpcb bom' for the\n");
+        fprintf(stderr, "   JLCPCB-ready format, or call kicad-cli directly for custom presets.)\n");
         return 1;
     }
 
@@ -136,11 +138,17 @@ static int cmd_sch_export(const char *sch_path, int argc, char **argv)
     if (strcmp(fmt, "pdf") == 0)         args[n++] = "pdf";
     else if (strcmp(fmt, "svg") == 0)    args[n++] = "svg";
     else if (strcmp(fmt, "netlist") == 0) args[n++] = "netlist";
-    else if (strcmp(fmt, "bom") == 0)    args[n - 1] = "bom";
+    else if (strcmp(fmt, "bom") == 0) {
+        fprintf(stderr, CLR_RED "error:" CLR_RESET
+                " BOM export was removed in v0.9.0.\n");
+        fprintf(stderr, "  Use 'kicli jlcpcb bom <file|dir> [-o CSV]' for the JLCPCB upload format.\n");
+        fprintf(stderr, "  For custom KiCad BOM presets, call kicad-cli directly.\n");
+        return 1;
+    }
     else {
         fprintf(stderr, CLR_RED "error:" CLR_RESET
                 " unknown export format '%s'\n", fmt);
-        fprintf(stderr, "  supported: pdf, svg, netlist, bom\n");
+        fprintf(stderr, "  supported: pdf, svg, netlist\n");
         return 1;
     }
 

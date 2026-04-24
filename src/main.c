@@ -20,6 +20,7 @@
 #include "kicli/kicad_cli.h"
 #include "kicli/jlcpcb.h"
 #include "kicli/import.h"
+#include "kicli/catalog.h"
 #include "skills_md.h"
 
 /* ── VT color support on Windows 10+ ───────────────────────────────────── */
@@ -149,6 +150,8 @@ int main(int argc, char *argv[]) {
     if (strcmp(cmd, "stock")        == 0) return cmd_stock     (argc - 1, argv + 1);
     if (strcmp(cmd, "jlcpcb")       == 0) return cmd_jlcpcb    (argc - 1, argv + 1);
     if (strcmp(cmd, "import")       == 0) return cmd_import    (argc - 1, argv + 1);
+    if (strcmp(cmd, "sym")          == 0) return cmd_sym       (argc - 1, argv + 1);
+    if (strcmp(cmd, "fp")           == 0) return cmd_fp        (argc - 1, argv + 1);
 
     if (strcmp(cmd, "kicad-path") == 0) {
         char path[KICAD_CLI_MAX_PATH];

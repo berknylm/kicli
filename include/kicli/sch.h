@@ -175,6 +175,15 @@ kicli_lib_symbol_t *kicli_sch_find_lib_symbol(kicli_schematic_t *sch, const char
 bool kicli_sch_pin_position(const kicli_schematic_t *sch, const char *ref,
                              const char *pin_number, kicli_pt_t *out);
 
+/* Load a bundled library symbol by "Lib:Name" id. Returns a cached tree
+ * (caller must NOT free). NULL on miss, with error set. */
+sexpr_t *kicli_sym_lib_find(const char *lib_id);
+
+/* Collect pin-number strings (strdup'd into nums_out[]) for one library
+ * symbol definition. Returns count. Caller frees each entry + array. */
+size_t kicli_sym_lib_get_pins(const sexpr_t *sym_def,
+                               char **nums_out, size_t cap);
+
 /* Note: the historical kicli_sch_write / kicli_sch_add_symbol / etc. entry
  * points were never wired up — schematic edits go through the dedicated
  * ops in src/sch/ops/ (set, set-all) which do direct s-expression writes. */
