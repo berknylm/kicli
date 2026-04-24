@@ -69,11 +69,12 @@ commands `/kicli:review`, `/kicli:bom`, `/kicli:search`, `/kicli:import`,
 
 1. Install the `kicli` binary above (prerequisite — the plugin does not
    bundle it).
-2. In any Claude Code session, run:
+2. **From a terminal** (not from Claude Desktop chat — `/plugin` slash
+   commands don't work there), run:
 
-   ```
-   /plugin marketplace add berknylm/kicli-plugin
-   /plugin install kicli@kicli-marketplace
+   ```bash
+   claude plugin marketplace add berknylm/kicli-plugin
+   claude plugin install kicli@kicli-marketplace
    ```
 
 3. **Fully quit Claude Desktop** (`Cmd+Q` on macOS, `Alt+F4` + quit on
