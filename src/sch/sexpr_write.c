@@ -42,6 +42,27 @@ sexpr_t *sexpr_make_list(void)
     return n;
 }
 
+sexpr_t *sexpr_clone(const sexpr_t *src)
+{
+    if (!src) return NULL;
+    sexpr_t *dst = (sexpr_t *)calloc(1, sizeof(sexpr_t));
+    if (!dst) return NULL;
+    dst->type = src->type;
+    if (src->value) {
+        dst->value = strdup(src->value);
+        if (!dst->value) { free(dst); return NULL; }
+    }
+    if (src->num_children > 0) {
+        dst->children = (sexpr_t **)malloc(src->num_children * sizeof(sexpr_t *));
+        if (!dst->children) { free(dst->value); free(dst); return NULL; }
+        dst->num_children = src->num_children;
+        for (size_t i = 0; i < src->num_children; i++) {
+            dst->children[i] = sexpr_clone(src->children[i]);
+        }
+    }
+    return dst;
+}
+
 int sexpr_list_append(sexpr_t *list, sexpr_t *child)
 {
     if (!list || list->type != SEXPR_LIST || !child) return 0;

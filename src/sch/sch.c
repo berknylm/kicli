@@ -20,6 +20,9 @@ int cmd_sch_info_pins(const char *sch_path, const char *ref,
 int find_root_sch  (const char *dir, char *out, size_t outsz);
 int cmd_sch_set    (const char *sch_path, const char *ref, const char *field, const char *value);
 int cmd_sch_set_all(const char *path, int argc, char **argv);
+int cmd_sch_place  (const char *sch_path, int argc, char **argv);
+int cmd_sch_net    (const char *sch_path, int argc, char **argv);
+int cmd_sch_nc     (const char *sch_path, int argc, char **argv);
 
 #define CLR_RESET  "\x1b[0m"
 #define CLR_RED    "\x1b[31m"
@@ -315,14 +318,21 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
         printf("                            across sheet pins ↔ hierarchical labels).\n");
         printf("                            --net NET prints a flat REF:PIN/NAME/TYPE table for\n");
         printf("                            every pin connected to NET (append SHEET on dir).\n");
-        printf("\nWrite:\n");
+        printf("\nWrite — property edit:\n");
         printf("  set <REF> <FIELD> <VALUE>                          One file only.\n");
         printf("    e.g. kicli sch board.kicad_sch set R1 LCSC C25744\n");
-        printf("  set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--dry-run]\n");
+        printf("  set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--only-empty] [--dry-run]\n");
         printf("    Accepts file or dir. Dir form walks every .kicad_sch.\n");
         printf("    e.g. kicli sch proj/ set-all \"LED\" LCSC C2286 --footprint \"*0603*\"\n");
+        printf("\nWrite — draw (single file, label-first style):\n");
+        printf("  place <lib_id> <ref> [<value>] [--at X,Y] [--angle A] [--mirror x|y] [--footprint FP]\n");
+        printf("    Adds a (symbol ...) from the bundled KiCad catalog. --at auto-grids.\n");
+        printf("  net <net-name> <ref>:<pin> [<ref>:<pin> ...] [--as local|global|power]\n");
+        printf("    Attaches labels (or power ports for +3V3/GND/VCC… rails) at the given pins.\n");
+        printf("  nc <ref>:<pin> [<ref>:<pin> ...]\n");
+        printf("    Places no_connect markers at pin positions.\n");
         printf("\nExport (kicad-cli passthrough, single file only):\n");
-        printf("  export pdf|svg|netlist|bom [-o FILE]\n");
+        printf("  export pdf|svg|netlist [-o FILE]\n");
         printf("  erc [-o FILE|-] [--format report|json]\n");
         printf("                            Electrical rules check. -o - streams to stdout;\n");
         printf("                            --format json emits machine-parseable JSON.\n");
@@ -378,6 +388,32 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
 
     if (strcmp(subcmd, "set-all") == 0) {
         return cmd_sch_set_all(sch_path, argc - 3, argv + 3);
+    }
+
+    /* Drawing primitives (place / net / nc): single file only. */
+    if (strcmp(subcmd, "place") == 0) {
+        if (is_dir) {
+            fprintf(stderr, CLR_RED "error:" CLR_RESET
+                    " 'place' requires a single .kicad_sch file, not a directory\n");
+            return 1;
+        }
+        return cmd_sch_place(sch_path, argc - 3, argv + 3);
+    }
+    if (strcmp(subcmd, "net") == 0) {
+        if (is_dir) {
+            fprintf(stderr, CLR_RED "error:" CLR_RESET
+                    " 'net' requires a single .kicad_sch file, not a directory\n");
+            return 1;
+        }
+        return cmd_sch_net(sch_path, argc - 3, argv + 3);
+    }
+    if (strcmp(subcmd, "nc") == 0) {
+        if (is_dir) {
+            fprintf(stderr, CLR_RED "error:" CLR_RESET
+                    " 'nc' requires a single .kicad_sch file, not a directory\n");
+            return 1;
+        }
+        return cmd_sch_nc(sch_path, argc - 3, argv + 3);
     }
 
     /* list and info — both support file and dir. */

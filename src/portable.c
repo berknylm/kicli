@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -267,6 +268,37 @@ int kicli_strcasecmp(const char *a, const char *b)
 #else
     return strcasecmp(a, b);
 #endif
+}
+
+void kicli_uuid4(char *out, size_t sz)
+{
+    if (sz < 37) { if (sz) out[0] = '\0'; return; }
+
+    /* Seed lazily. Mix time + pid so concurrent processes don't collide. */
+    static int seeded = 0;
+    if (!seeded) {
+#ifdef _WIN32
+        unsigned long pid = (unsigned long)GetCurrentProcessId();
+#else
+        unsigned long pid = (unsigned long)getpid();
+#endif
+        srand((unsigned int)(time(NULL) ^ (pid * 2654435761u)));
+        seeded = 1;
+    }
+
+    /* Per RFC 4122 the 7th nibble should be 4 and the 9th in {8,9,a,b}. We
+     * don't depend on strict version semantics — KiCad treats UUIDs as
+     * opaque strings — but we keep the pattern so tools that inspect them
+     * don't complain. */
+    unsigned r[5];
+    for (int i = 0; i < 5; i++) r[i] = (unsigned)rand();
+    snprintf(out, sz, "%08x-%04x-4%03x-%04x-%04x%08x",
+             r[0],
+             r[1] & 0xffff,
+             r[2] & 0xfff,
+             (r[3] & 0x3fff) | 0x8000,
+             r[4] & 0xffff,
+             (unsigned)rand());
 }
 
 /* ── Directory iteration ────────────────────────────────────────────────── */

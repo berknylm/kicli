@@ -27,6 +27,7 @@ const char *sexpr_atom_value(const sexpr_t *list, const char *key); /* first ato
 sexpr_t *sexpr_make_atom(const char *val);          /* bare atom   */
 sexpr_t *sexpr_make_str(const char *val);           /* "quoted"    */
 sexpr_t *sexpr_make_list(void);                     /* empty list  */
+sexpr_t *sexpr_clone(const sexpr_t *src);           /* deep copy   */
 int      sexpr_list_append(sexpr_t *list, sexpr_t *child); /* 1=ok */
 
 /* ── S-expression serializer ─────────────────────────────────────────────── */
