@@ -30,6 +30,23 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
   kicli sch <file|dir> set-all <VALUE> <FIELD> <NEW> [--footprint <glob>] [--only-empty] [--dry-run]
                                         --only-empty writes only when the target field is currently empty
                                          (useful for first-time Footprint / LCSC assignment)
+
+  kicli sch <file> place <lib_id> <ref> [<value>] [--at X,Y] [--angle 0|90|180|270]
+                                        Add a symbol from the bundled KiCad catalog.
+                                        --at auto-grids when omitted (10 columns × N rows).
+                                        Examples:
+                                          kicli sch board.kicad_sch place Device:R       R1 10k
+                                          kicli sch board.kicad_sch place Device:C       C1 100nF --at 60,50
+                                          kicli sch board.kicad_sch place Amplifier_Operational:LM358 U1 LM358
+  kicli sch <file> net <net-name> <ref>:<pin> [<ref>:<pin> ...] [--as local|global|power]
+                                        Attaches a label at each pin's world position — no wires.
+                                        Net name matched against power rails (GND, VCC, VDD, VSS, VEE,
+                                        GNDA/AGND/PGND, +BATT, EARTH, any +<voltage>V pattern) → emits
+                                        a power port from the bundled `power` library; otherwise a plain
+                                        local label. Use --as to force a specific primitive.
+  kicli sch <file> nc <ref>:<pin> [<ref>:<pin> ...]
+                                        Places no_connect markers at pin positions.
+
   kicli sch <file> export pdf|svg|netlist [-o FILE]        (BOM removed in v0.9.0 — use jlcpcb bom)
   kicli sch <file> erc [-o FILE|-] [--format report|json]
                                         Use -o - to stream the report to stdout
@@ -63,6 +80,37 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
                                                        on footprints with exposed pad; may exceed pin count
   kicli fp  info <lib:name>                           One footprint's metadata + filesystem path
   kicli fp  list [lib]                                List all footprints, optionally restrict to one library
+
+## Drawing a circuit from scratch (label-first)
+
+  kicli never routes wires — every connection is a label at the pin's world
+  position. Electrically identical to a wire-based sheet, visually scattered.
+  Open in KiCad to rearrange if aesthetics matter.
+
+  # 1. Scaffold a project
+  kicli new opamp_demo
+  cd opamp_demo
+
+  # 2. Place components (auto-grid if --at omitted)
+  kicli sch opamp_demo.kicad_sch place Amplifier_Operational:LM358 U1 LM358
+  kicli sch opamp_demo.kicad_sch place Device:R                    R1 10k
+  kicli sch opamp_demo.kicad_sch place Device:R                    R2 10k
+  kicli sch opamp_demo.kicad_sch place Device:C                    C1 100nF
+
+  # 3. Attach pins to nets — one command per net, list every pin on that net.
+  #    Rails auto-become power ports:
+  kicli sch opamp_demo.kicad_sch net VOUT  U1:1 R1:1
+  kicli sch opamp_demo.kicad_sch net VINN  U1:2 R1:2 R2:1
+  kicli sch opamp_demo.kicad_sch net VINP  U1:3
+  kicli sch opamp_demo.kicad_sch net GND   U1:4 R2:2 C1:2    # → power:GND
+  kicli sch opamp_demo.kicad_sch net +5V   U1:8 C1:1         # → power:+5V
+
+  # 4. NC markers on any pins you deliberately leave floating.
+  kicli sch opamp_demo.kicad_sch nc U1:5 U1:6 U1:7
+
+  # 5. Verify + open in KiCad
+  kicli sch opamp_demo.kicad_sch view         # netlist, ERC-clean
+  kicad opamp_demo.kicad_pro                  # drag to re-layout
 
 ## Schematic recipes
 

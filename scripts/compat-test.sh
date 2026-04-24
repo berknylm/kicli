@@ -216,6 +216,51 @@ fi
 
 # ──────────────────────────────────────────────────────────────────────────
 
+head2 "Schematic drawing (place / net / nc)"
+
+DRAW_SCH="$TMP/draw_probe.kicad_sch"
+"$KICLI" new draw_probe "$TMP" >/dev/null 2>&1 || true
+# `kicli new` writes to <dir>/<name>.kicad_sch; it refuses to overwrite so we
+# reuse the existing compat_probe blank created earlier.
+cp "$TMP/compat_probe.kicad_sch" "$DRAW_SCH"
+
+assert "place Device:R" \
+    bash -c "'$KICLI' sch '$DRAW_SCH' place Device:R R1 10k > /dev/null"
+
+assert "place Amplifier_Operational:LM358 (tests extends alias)" \
+    bash -c "'$KICLI' sch '$DRAW_SCH' place Amplifier_Operational:LM358 U1 LM358 > /dev/null"
+
+assert "net attaches a local label at pin position" \
+    bash -c "'$KICLI' sch '$DRAW_SCH' net SIG1 R1:1 > /dev/null && \
+             grep -qE '^[[:space:]]*\"SIG1\"[[:space:]]*\$' '$DRAW_SCH'"
+
+assert "net attaches a power port for GND (power lib auto-imported)" \
+    bash -c "'$KICLI' sch '$DRAW_SCH' net GND R1:2 > /dev/null && \
+             grep -qF 'power:GND' '$DRAW_SCH'"
+
+assert "net +3V3 canonicalizes variants (3V3 → +3V3)" \
+    bash -c "'$KICLI' sch '$DRAW_SCH' place Device:C C1 100nF > /dev/null && \
+             '$KICLI' sch '$DRAW_SCH' net 3V3 C1:1 > /dev/null && \
+             grep -qF 'power:+3V3' '$DRAW_SCH'"
+
+assert "nc places a no_connect marker" \
+    bash -c "'$KICLI' sch '$DRAW_SCH' nc U1:5 > /dev/null && \
+             grep -qF 'no_connect' '$DRAW_SCH'"
+
+assert "full draw result re-loads cleanly in kicad-cli" \
+    "$KICAD_CLI_PATH" sch upgrade --force "$DRAW_SCH"
+
+assert_match "kicli view sees every drawn net name after build" \
+    '→ GND' "$KICLI" sch "$DRAW_SCH" view
+
+assert "place refuses duplicate reference" \
+    bash -c "! '$KICLI' sch '$DRAW_SCH' place Device:R R1 22k 2>/dev/null"
+
+assert "place rejects unknown lib_id with exit 2" \
+    bash -c "'$KICLI' sch '$DRAW_SCH' place Nonexistent:Thing X1 foo 2>/dev/null; [ \$? -eq 2 ]"
+
+# ──────────────────────────────────────────────────────────────────────────
+
 head2 "JLCPCB API contract"
 
 if [ "$OFFLINE" = 1 ]; then

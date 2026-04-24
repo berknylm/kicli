@@ -85,12 +85,8 @@ static int write_sch(const char *dir, const char *name) {
     char path[1024];
     snprintf(path, sizeof(path), "%s/%s.kicad_sch", dir, name);
 
-    /* Simple UUID from time + rand */
-    srand((unsigned int)time(NULL));
     char uuid[40];
-    snprintf(uuid, sizeof(uuid), "%08x-%04x-4%03x-%04x-%012x",
-             rand(), rand()&0xffff, rand()&0xfff,
-             (rand()&0x3fff)|0x8000, rand());
+    kicli_uuid4(uuid, sizeof(uuid));
 
     return write_file(path,
         "(kicad_sch\n"

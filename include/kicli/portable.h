@@ -72,6 +72,13 @@ void kicli_temp_path(char *out, size_t sz, const char *label, const char *ext);
 
 int  kicli_strcasecmp(const char *a, const char *b);
 
+/* Write a random UUIDv4-ish string (8-4-4-4-12 hex = 36 chars + NUL) into
+ * `out`. `out` must be at least 37 bytes. Seeded from time()+pid so every
+ * call in a single process produces a distinct value; acceptable for
+ * generating KiCad UUIDs — KiCad itself doesn't require RFC 4122 rigour
+ * for the variant bits. */
+void kicli_uuid4(char *out, size_t sz);
+
 /* ── Directory iteration ────────────────────────────────────────────────── */
 
 typedef struct kicli_dir kicli_dir_t;
