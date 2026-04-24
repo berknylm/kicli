@@ -63,14 +63,28 @@ Pre-built binaries: [Releases](https://github.com/berknylm/kicli/releases/latest
 
 ### Claude Code plugin
 
-First-class integration with Claude Code (`/kicli:review`, `/kicli:bom`, `/kicli:search`, `/kicli:import`, `/kicli:new`):
+First-class integration with Claude Code (Desktop app + CLI). Adds slash
+commands `/kicli:review`, `/kicli:bom`, `/kicli:search`, `/kicli:import`,
+`/kicli:new` plus a passive skill that teaches Claude the CLI surface.
 
-```
-/plugin marketplace add berknylm/kicli-plugin
-/plugin install kicli@kicli-marketplace
-```
+1. Install the `kicli` binary above (prerequisite — the plugin does not
+   bundle it).
+2. In any Claude Code session, run:
 
-Plugin repo: [github.com/berknylm/kicli-plugin](https://github.com/berknylm/kicli-plugin)
+   ```
+   /plugin marketplace add berknylm/kicli-plugin
+   /plugin install kicli@kicli-marketplace
+   ```
+
+3. **Fully quit Claude Desktop** (`Cmd+Q` on macOS, `Alt+F4` + quit on
+   Windows — closing the window is not enough) and reopen.
+
+4. In a new chat, type `/kicli` and press Tab — the five slash commands
+   should autocomplete. The session-start line should also show
+   `kicli 0.9.0` from the install-check hook.
+
+Full install + troubleshooting guide (network issues, PATH quirks,
+updates): [kicli-plugin README](https://github.com/berknylm/kicli-plugin#install).
 
 ---
 
