@@ -242,16 +242,28 @@ int cmd_sch_net(const char *sch_path, int argc, char **argv)
         const char *pin = colon + 1;
 
         double wx, wy, wa;
+        int from_sheet = 0;
         if (world_pin_pos(root, ref, pin, &wx, &wy, &wa) != 0) {
-            fprintf(stderr, "error: %s\n", kicli_last_error());
-            n_err++; continue;
+            /* Try sheet-pin lookup: SheetName:PinName for hierarchical sheets. */
+            if (sheet_pin_pos(root, ref, pin, &wx, &wy, &wa) != 0) {
+                fprintf(stderr, "error: %s\n", kicli_last_error());
+                n_err++; continue;
+            }
+            from_sheet = 1;
         }
 
         wx = snap_grid(wx, 1.27);
         wy = snap_grid(wy, 1.27);
 
         sexpr_t *primitive;
-        if (is_power) {
+        if (from_sheet) {
+            /* On the parent side of a sheet pin, ALWAYS emit a plain label
+             * with the net name. The sheet pin already carries the name on
+             * its own; matching plain label at the same coord splices the
+             * parent net to the child. Power-port heuristic and --as hier/
+             * global are intentionally bypassed here. */
+            primitive = mk_label(net, wx, wy, wa);
+        } else if (is_power) {
             primitive = mk_power_port(canon, wx, wy, wa, root_uuid, proj);
         } else if (force_as && (strcmp(force_as, "hier") == 0 ||
                                 strcmp(force_as, "hierarchical") == 0)) {

@@ -4,6 +4,15 @@ All notable changes to **kicli** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] — 2026-04-25
+
+### Added
+- `sch net <name> <SheetName>:<PinName>` — `cmd_sch_net` now accepts a
+  hierarchical sheet pin in place of `<ref>:<pin>`. The label is dropped
+  at the sheet pin's exact world coordinate so the parent net splices to
+  the child's hierarchical_label by name. Closes the connectivity gap
+  ERC was reporting between parent labels and sheet pins.
+
 ## [0.11.0] — 2026-04-25
 
 ### Added

@@ -72,6 +72,12 @@ int         placed_at         (const sexpr_t *sym, double *x, double *y, double 
 int         placed_mirror_x   (const sexpr_t *sym);
 int         world_pin_pos     (sexpr_t *root, const char *ref, const char *pin_num,
                                double *wx, double *wy, double *wangle);
+/* Look up a (sheet) by Sheetname property and return the (pin "name" …)
+ * coordinate. Used so `kicli sch parent net VIN Buck5V:VIN` works the
+ * same way as `R1:1` for placed symbols. Returns 0 on success. */
+int         sheet_pin_pos     (const sexpr_t *root, const char *sheet_name,
+                               const char *pin_name,
+                               double *wx, double *wy, double *wangle);
 const char *lib_default_property(const sexpr_t *lib_def, const sexpr_t *root,
                                  const char *lib_id, const char *key);
 

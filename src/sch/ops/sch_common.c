@@ -305,6 +305,56 @@ static int find_lib_pin_recursive(const sexpr_t *node, const char *num,
     return -1;
 }
 
+/* Find a (sheet) child whose (property "Sheetname" "name") matches.
+ * Walks the root's children directly. Pin coords on a sheet block are
+ * stored as absolute world coords already (no rotation/mirror to fold in). */
+int sheet_pin_pos(const sexpr_t *root, const char *sheet_name,
+                  const char *pin_name,
+                  double *wx, double *wy, double *wangle)
+{
+    *wx = *wy = *wangle = 0;
+    for (size_t i = 0; i < root->num_children; i++) {
+        const sexpr_t *sh = root->children[i];
+        if (!sh || sh->type != SEXPR_LIST || sh->num_children == 0) continue;
+        if (!sh->children[0]->value || strcmp(sh->children[0]->value, "sheet") != 0) continue;
+
+        /* Match Sheetname */
+        const char *got_name = NULL;
+        for (size_t j = 1; j < sh->num_children; j++) {
+            const sexpr_t *c = sh->children[j];
+            if (!c || c->type != SEXPR_LIST || c->num_children < 3) continue;
+            if (!c->children[0]->value || strcmp(c->children[0]->value, "property") != 0) continue;
+            if (c->children[1]->value && strcmp(c->children[1]->value, "Sheetname") == 0) {
+                got_name = c->children[2]->value;
+                break;
+            }
+        }
+        if (!got_name || strcmp(got_name, sheet_name) != 0) continue;
+
+        /* Walk the sheet's (pin "name" type (at X Y A) …) children. */
+        for (size_t j = 1; j < sh->num_children; j++) {
+            const sexpr_t *p = sh->children[j];
+            if (!p || p->type != SEXPR_LIST || p->num_children < 4) continue;
+            if (!p->children[0]->value || strcmp(p->children[0]->value, "pin") != 0) continue;
+            if (!p->children[1]->value || strcmp(p->children[1]->value, pin_name) != 0) continue;
+            for (size_t k = 2; k < p->num_children; k++) {
+                const sexpr_t *at = p->children[k];
+                if (!at || at->type != SEXPR_LIST || at->num_children < 3) continue;
+                if (!at->children[0]->value || strcmp(at->children[0]->value, "at") != 0) continue;
+                if (at->children[1]->value) *wx = atof(at->children[1]->value);
+                if (at->children[2]->value) *wy = atof(at->children[2]->value);
+                if (at->num_children > 3 && at->children[3]->value)
+                    *wangle = atof(at->children[3]->value);
+                return 0;
+            }
+        }
+        kicli_set_error("sheet '%s' has no pin '%s'", sheet_name, pin_name);
+        return -1;
+    }
+    kicli_set_error("sheet named '%s' not found", sheet_name);
+    return -1;
+}
+
 int world_pin_pos(sexpr_t *root, const char *ref, const char *pin_num,
                   double *wx, double *wy, double *wangle)
 {
