@@ -507,10 +507,45 @@ static sexpr_t *mk_property(const char *key, const char *value,
     return prop;
 }
 
+/* Look up a (property "key" "value" ...) in a lib_def, optionally falling
+ * back to its (extends "Base") sibling. Returns the cached const char* or
+ * NULL if neither has the property. */
+static const char *lib_default_property(const sexpr_t *lib_def,
+                                         const sexpr_t *root,
+                                         const char *lib_id,
+                                         const char *key)
+{
+    if (!lib_def) return NULL;
+    for (size_t i = 1; i < lib_def->num_children; i++) {
+        sexpr_t *c = lib_def->children[i];
+        if (!c || c->type != SEXPR_LIST || c->num_children < 3) continue;
+        if (!c->children[0]->value || strcmp(c->children[0]->value, "property") != 0) continue;
+        if (c->children[1]->value && strcmp(c->children[1]->value, key) == 0)
+            return c->children[2]->value;
+    }
+    /* Try extends base — common for aliases (LM358 → LM2904) */
+    for (size_t i = 1; i < lib_def->num_children; i++) {
+        sexpr_t *c = lib_def->children[i];
+        if (!c || c->type != SEXPR_LIST || c->num_children < 2) continue;
+        if (!c->children[0]->value || strcmp(c->children[0]->value, "extends") != 0) continue;
+        const char *base = c->children[1]->value;
+        if (!base) break;
+        const char *colon = strchr(lib_id, ':');
+        if (!colon) break;
+        char base_id[256];
+        snprintf(base_id, sizeof(base_id), "%.*s:%s", (int)(colon - lib_id), lib_id, base);
+        sexpr_t *base_def = find_lib_symbol_node(root, base_id);
+        if (base_def) return lib_default_property(base_def, root, base_id, key);
+        break;
+    }
+    return NULL;
+}
+
 static sexpr_t *mk_placed_symbol(const char *lib_id, const char *ref,
                                   const char *value,
                                   double x, double y, double angle,
                                   const sexpr_t *lib_def,
+                                  const sexpr_t *root,
                                   const char *root_uuid,
                                   const char *project_name)
 {
@@ -525,11 +560,18 @@ static sexpr_t *mk_placed_symbol(const char *lib_id, const char *ref,
     sexpr_list_append(sym, mk_named_atom("dnp",      "no"));
     sexpr_list_append(sym, mk_uuid_node());
 
+    /* Inherit defaults from the library symbol — the same convention KiCad
+     * uses when a user drops a symbol from the palette. The `place --footprint`
+     * flag still wins because we patch the Footprint property after. */
+    const char *def_fp   = lib_default_property(lib_def, root, lib_id, "Footprint");
+    const char *def_ds   = lib_default_property(lib_def, root, lib_id, "Datasheet");
+    const char *def_desc = lib_default_property(lib_def, root, lib_id, "Description");
+
     sexpr_list_append(sym, mk_property("Reference", ref,   x + 2.54, y - 2.54, 0, 0));
     sexpr_list_append(sym, mk_property("Value",     value, x + 2.54, y + 2.54, 0, 0));
-    sexpr_list_append(sym, mk_property("Footprint", "",    x,        y,        0, 1));
-    sexpr_list_append(sym, mk_property("Datasheet", "~",   x,        y,        0, 1));
-    sexpr_list_append(sym, mk_property("Description","",   x,        y,        0, 1));
+    sexpr_list_append(sym, mk_property("Footprint", def_fp ? def_fp : "",  x, y, 0, 1));
+    sexpr_list_append(sym, mk_property("Datasheet", def_ds ? def_ds : "~", x, y, 0, 1));
+    sexpr_list_append(sym, mk_property("Description", def_desc ? def_desc : "", x, y, 0, 1));
 
     /* (pin "N" (uuid "...")) per pin in the lib def. */
     for (size_t i = 1; lib_def && i < lib_def->num_children; i++) {
@@ -769,7 +811,7 @@ int cmd_sch_place(const char *sch_path, int argc, char **argv)
     project_name_for(sch_path, proj, sizeof(proj));
 
     sexpr_t *sym = mk_placed_symbol(lib_id, ref, value, at_x, at_y, at_a,
-                                     lib_def, root_uuid, proj);
+                                     lib_def, root, root_uuid, proj);
 
     /* Optional (mirror x|y) override. Added after builder for clarity. */
     if (mirror_x || mirror_y) {
