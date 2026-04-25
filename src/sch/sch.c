@@ -23,6 +23,8 @@ int cmd_sch_set_all(const char *path, int argc, char **argv);
 int cmd_sch_place  (const char *sch_path, int argc, char **argv);
 int cmd_sch_net    (const char *sch_path, int argc, char **argv);
 int cmd_sch_nc     (const char *sch_path, int argc, char **argv);
+int cmd_sch_check  (const char *sch_path, int argc, char **argv);
+int cmd_sch_sheet  (const char *sch_path, int argc, char **argv);
 
 #define CLR_RESET  "\x1b[0m"
 #define CLR_RED    "\x1b[31m"
@@ -325,12 +327,21 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
         printf("    Accepts file or dir. Dir form walks every .kicad_sch.\n");
         printf("    e.g. kicli sch proj/ set-all \"LED\" LCSC C2286 --footprint \"*0603*\"\n");
         printf("\nWrite — draw (single file, label-first style):\n");
-        printf("  place <lib_id> <ref> [<value>] [--at X,Y] [--angle A] [--mirror x|y] [--footprint FP]\n");
+        printf("  place <lib_id> <ref|?> [<value>] [--at X,Y] [--angle A] [--mirror x|y] [--footprint FP]\n");
         printf("    Adds a (symbol ...) from the bundled KiCad catalog. --at auto-grids.\n");
-        printf("  net <net-name> <ref>:<pin> [<ref>:<pin> ...] [--as local|global|power]\n");
+        printf("    Pass `?` as ref to auto-annotate (next free <PREFIX><N>, e.g. R1→R2→R3).\n");
+        printf("  net <net-name> <ref>:<pin> [<ref>:<pin> ...] [--as local|global|hier|power]\n");
         printf("    Attaches labels (or power ports for +3V3/GND/VCC… rails) at the given pins.\n");
+        printf("    --as hier emits hierarchical_label — match it with a `sheet` pin in the parent.\n");
+        printf("  sheet <name> <child-file> [--at X,Y] [--size W,H] [--pins NAME[:type],…]\n");
+        printf("    Adds a hierarchical sheet to the parent. Creates child .kicad_sch if absent.\n");
         printf("  nc <ref>:<pin> [<ref>:<pin> ...]\n");
         printf("    Places no_connect markers at pin positions.\n");
+        printf("\nValidate — layout-readiness:\n");
+        printf("  check [--no-erc]\n");
+        printf("    One-shot validator. Reports duplicate refs (incl. #PWR), empty\n");
+        printf("    Footprints, duplicate UUIDs, and ERC violations. Exit 0 only when\n");
+        printf("    the schematic is layout-ready.\n");
         printf("\nExport (kicad-cli passthrough, single file only):\n");
         printf("  export pdf|svg|netlist [-o FILE]\n");
         printf("  erc [-o FILE|-] [--format report|json]\n");
@@ -406,6 +417,22 @@ int cmd_sch(int argc, char **argv, const kicli_config_t *cfg)
             return 1;
         }
         return cmd_sch_net(sch_path, argc - 3, argv + 3);
+    }
+    if (strcmp(subcmd, "sheet") == 0) {
+        if (is_dir) {
+            fprintf(stderr, CLR_RED "error:" CLR_RESET
+                    " 'sheet' requires a single .kicad_sch file, not a directory\n");
+            return 1;
+        }
+        return cmd_sch_sheet(sch_path, argc - 3, argv + 3);
+    }
+    if (strcmp(subcmd, "check") == 0) {
+        if (is_dir) {
+            fprintf(stderr, CLR_RED "error:" CLR_RESET
+                    " 'check' requires a single .kicad_sch file, not a directory\n");
+            return 1;
+        }
+        return cmd_sch_check(sch_path, argc - 3, argv + 3);
     }
     if (strcmp(subcmd, "nc") == 0) {
         if (is_dir) {

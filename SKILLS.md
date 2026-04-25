@@ -31,21 +31,39 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
                                         --only-empty writes only when the target field is currently empty
                                          (useful for first-time Footprint / LCSC assignment)
 
-  kicli sch <file> place <lib_id> <ref> [<value>] [--at X,Y] [--angle 0|90|180|270]
+  kicli sch <file> place <lib_id> <ref|?> [<value>] [--at X,Y] [--angle 0|90|180|270]
+                                                                 [--mirror x|y] [--footprint FP]
                                         Add a symbol from the bundled KiCad catalog.
                                         --at auto-grids when omitted (10 columns × N rows).
+                                        Pass `?` as ref to auto-annotate the next free <PREFIX><N>
+                                        (Device:R → R1, R2, …; IC libs → U1, U2, …).
                                         Examples:
                                           kicli sch board.kicad_sch place Device:R       R1 10k
-                                          kicli sch board.kicad_sch place Device:C       C1 100nF --at 60,50
+                                          kicli sch board.kicad_sch place Device:C       ?  100nF
                                           kicli sch board.kicad_sch place Amplifier_Operational:LM358 U1 LM358
-  kicli sch <file> net <net-name> <ref>:<pin> [<ref>:<pin> ...] [--as local|global|power]
+  kicli sch <file> net <net-name> <ref>:<pin> [<ref>:<pin> ...] [--as local|global|hier|power]
                                         Attaches a label at each pin's world position — no wires.
                                         Net name matched against power rails (GND, VCC, VDD, VSS, VEE,
                                         GNDA/AGND/PGND, +BATT, EARTH, any +<voltage>V pattern) → emits
-                                        a power port from the bundled `power` library; otherwise a plain
-                                        local label. Use --as to force a specific primitive.
+                                        a power port from the bundled `power` library; otherwise a
+                                        local label. Use --as to force:
+                                          local | global | hier | power
+                                        --as hier writes (hierarchical_label) — match it with a sheet
+                                        pin in the parent (kicli sch parent sheet … --pins NAME:io).
   kicli sch <file> nc <ref>:<pin> [<ref>:<pin> ...]
                                         Places no_connect markers at pin positions.
+  kicli sch <parent> sheet <name> <child-file> [--at X,Y] [--size W,H] [--pins NAME[:type],…]
+                                        Adds a hierarchical sub-sheet to <parent>. Creates
+                                        <child-file> with a blank schematic if missing
+                                        (existing files are left alone). Sheet pins auto-distribute
+                                        on the left edge.
+                                        Pin types: passive | input | output | bidirectional
+                                                 | tri_state | power_in | power_out
+  kicli sch <file> check [--no-erc]
+                                        One-shot layout-readiness validator. Reports duplicate
+                                        references (incl. #PWR collisions), missing footprints,
+                                        duplicate UUIDs, and ERC error-severity violations.
+                                        Exit 0 only when the schematic is layout-ready.
 
   kicli sch <file> export pdf|svg|netlist [-o FILE]        (BOM removed in v0.9.0 — use jlcpcb bom)
   kicli sch <file> erc [-o FILE|-] [--format report|json]
@@ -110,7 +128,28 @@ Pipe-friendly CLI for KiCad 10. All output is plain text for grep/awk/cut.
 
   # 5. Verify + open in KiCad
   kicli sch opamp_demo.kicad_sch view         # netlist, ERC-clean
+  kicli sch opamp_demo.kicad_sch check        # layout-readiness gate (dup refs, footprints, UUIDs, ERC)
   kicad opamp_demo.kicad_pro                  # drag to re-layout
+
+## Hierarchical (multi-sheet) design
+
+  Split a design into sub-sheets when one block has its own coherent boundary
+  (power supply, MCU subsystem, RF front-end, etc.). Each sub-sheet is a
+  separate .kicad_sch file referenced by the parent.
+
+  # Parent declares a sub-sheet + its border pins:
+  kicli sch design.kicad_sch sheet Power power.kicad_sch \
+      --pins VIN:input,+5V:output,GND:passive
+
+  # Inside the child, draw normally — but emit hierarchical labels instead
+  # of plain labels for nets that cross into the parent. They splice by name.
+  kicli sch power.kicad_sch place Regulator_Switching:TPS54302 U1 TPS54302
+  kicli sch power.kicad_sch net VIN  U1:3 --as hier
+  kicli sch power.kicad_sch net +5V  L1:2 --as hier   # + the rest of the +5V rail
+  kicli sch power.kicad_sch net GND  U1:1 --as hier
+
+  # `kicli sch <project-dir> view` walks every .kicad_sch and resolves
+  # cross-sheet net names through the root netlist.
 
 ## Schematic recipes
 

@@ -259,6 +259,57 @@ assert "place refuses duplicate reference" \
 assert "place rejects unknown lib_id with exit 2" \
     bash -c "'$KICLI' sch '$DRAW_SCH' place Nonexistent:Thing X1 foo 2>/dev/null; [ \$? -eq 2 ]"
 
+# ── v0.10.2: layout-readiness checks ──────────────────────────────────────
+CHK_SCH="$TMP/check_probe.kicad_sch"
+cp "$TMP/compat_probe.kicad_sch" "$CHK_SCH"
+
+assert "place ? auto-annotates next free Rn" \
+    bash -c "'$KICLI' sch '$CHK_SCH' place Device:R '?' 1k > /dev/null && \
+             '$KICLI' sch '$CHK_SCH' place Device:R '?' 2k > /dev/null && \
+             '$KICLI' sch '$CHK_SCH' place Device:C '?' 100nF > /dev/null && \
+             '$KICLI' sch '$CHK_SCH' list | awk '{print \$1}' | sort | tr '\n' ' ' | grep -q 'C1 R1 R2'"
+
+assert "check reports no_footprint when Footprint is empty" \
+    bash -c "'$KICLI' sch '$CHK_SCH' check --no-erc | grep -q '^no_footprint'"
+
+assert "check passes after assigning all footprints (--no-erc)" \
+    bash -c "'$KICLI' sch '$CHK_SCH' set R1 Footprint Resistor_SMD:R_0603_1608Metric > /dev/null && \
+             '$KICLI' sch '$CHK_SCH' set R2 Footprint Resistor_SMD:R_0603_1608Metric > /dev/null && \
+             '$KICLI' sch '$CHK_SCH' set C1 Footprint Capacitor_SMD:C_0603_1608Metric > /dev/null && \
+             '$KICLI' sch '$CHK_SCH' check --no-erc | tail -1 | grep -q '0 issue'"
+
+assert "check detects duplicate reference (#PWR collisions are the historical bug)" \
+    bash -c "cp '$CHK_SCH' '$CHK_SCH.bak' && \
+             sed -i.tmp 's/\"R2\"/\"R1\"/' '$CHK_SCH' && \
+             '$KICLI' sch '$CHK_SCH' check --no-erc | grep -q '^dup_ref' && \
+             cp '$CHK_SCH.bak' '$CHK_SCH'"
+
+assert "sheet creates a hierarchical sub-sheet + child file with pins" \
+    bash -c "PARENT='$TMP/hier_parent.kicad_sch'; CHILD='$TMP/hier_child.kicad_sch'; \
+             cp '$TMP/compat_probe.kicad_sch' \"\$PARENT\"; rm -f \"\$CHILD\"; \
+             '$KICLI' sch \"\$PARENT\" sheet Power hier_child.kicad_sch --pins VIN:input,GND:passive > /dev/null && \
+             [ -f \"\$CHILD\" ] && \
+             grep -qE '\(sheet$' \"\$PARENT\" && \
+             grep -qF 'Sheetname' \"\$PARENT\" && \
+             tr '\n' ' ' < \"\$PARENT\" | grep -qE '\"VIN\"[[:space:]]+input' && \
+             '$KICAD_CLI_PATH' sch upgrade --force \"\$PARENT\" >/dev/null && \
+             '$KICAD_CLI_PATH' sch upgrade --force \"\$CHILD\" >/dev/null"
+
+assert "net --as hier emits hierarchical_label" \
+    bash -c "CHILD='$TMP/hier_child.kicad_sch'; \
+             '$KICLI' sch \"\$CHILD\" place Device:R Rh 1k > /dev/null && \
+             '$KICLI' sch \"\$CHILD\" net VIN Rh:1 --as hier > /dev/null && \
+             grep -qF 'hierarchical_label' \"\$CHILD\""
+
+assert "net to power rail seeds #PWR counter from existing refs (no duplicates)" \
+    bash -c "FRESH='$TMP/pwrseed.kicad_sch'; cp '$TMP/compat_probe.kicad_sch' \"\$FRESH\"; \
+             '$KICLI' sch \"\$FRESH\" place Device:R Ra 1k > /dev/null; \
+             '$KICLI' sch \"\$FRESH\" place Device:R Rb 1k > /dev/null; \
+             '$KICLI' sch \"\$FRESH\" net GND Ra:1 > /dev/null; \
+             '$KICLI' sch \"\$FRESH\" net GND Rb:1 > /dev/null; \
+             N_DUP=\$(grep -E 'reference \"#PWR' \"\$FRESH\" | sort | uniq -d | wc -l); \
+             [ \"\$N_DUP\" -eq 0 ]"
+
 # ──────────────────────────────────────────────────────────────────────────
 
 head2 "JLCPCB API contract"
