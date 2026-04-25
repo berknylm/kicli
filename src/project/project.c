@@ -90,7 +90,7 @@ static int write_sch(const char *dir, const char *name) {
 
     return write_file(path,
         "(kicad_sch\n"
-        "  (version 20241010)\n"
+        "  (version 20260306)\n"
         "  (generator \"kicli\")\n"
         "  (generator_version \"0.1\")\n"
         "  (uuid \"%s\")\n"

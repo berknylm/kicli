@@ -94,6 +94,11 @@ int         placed_at         (const sexpr_t *sym, double *x, double *y, double 
 int         placed_mirror_x   (const sexpr_t *sym);
 int         world_pin_pos     (sexpr_t *root, const char *ref, const char *pin_num,
                                double *wx, double *wy, double *wangle);
+/* Return the electrical type of a placed symbol's pin
+ * (e.g. "input", "output", "bidirectional", "tri_state", "passive",
+ * "power_in", "power_out", "open_collector", "open_emitter",
+ * "no_connect", "unspecified"). Returns NULL if not found. */
+const char *placed_pin_type   (sexpr_t *root, const char *ref, const char *pin_num);
 /* Look up a (sheet) by Sheetname property and return the (pin "name" …)
  * coordinate. Used so `kicli sch parent net VIN Buck5V:VIN` works the
  * same way as `R1:1` for placed symbols. Returns 0 on success. */

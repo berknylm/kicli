@@ -16,6 +16,36 @@
 #include <math.h>
 #include <errno.h>
 
+/* Forward decls for helpers used cross-section. */
+static int  lib_property_coords(const sexpr_t *lib_def, const char *key,
+                                double *lx, double *ly, double *la, int *hide);
+static void add_inherited_property(sexpr_t *sym, const sexpr_t *lib_def,
+                                   const char *key, const char *value,
+                                   double sym_x, double sym_y, double sym_a);
+
+/* If lib_def has (extends "Base"), return the base symbol's lib_def from
+ * root. Returns NULL if no extends, base not loaded, or lib_id missing.
+ * The returned pointer is non-owning. */
+static sexpr_t *find_extends_base(const sexpr_t *lib_def, const sexpr_t *root,
+                                   const char *lib_id)
+{
+    if (!lib_def || !lib_id) return NULL;
+    for (size_t i = 1; i < lib_def->num_children; i++) {
+        const sexpr_t *c = lib_def->children[i];
+        if (!c || c->type != SEXPR_LIST || c->num_children < 2) continue;
+        if (!c->children[0]->value || strcmp(c->children[0]->value, "extends") != 0) continue;
+        const char *base_name = c->children[1]->value;
+        if (!base_name) return NULL;
+        const char *colon = strchr(lib_id, ':');
+        if (!colon) return NULL;
+        char base_id[256];
+        snprintf(base_id, sizeof(base_id), "%.*s:%s",
+                 (int)(colon - lib_id), lib_id, base_name);
+        return find_lib_symbol_node(root, base_id);
+    }
+    return NULL;
+}
+
 /* ── Tiny sexpr atom builders ──────────────────────────────────────────── */
 
 sexpr_t *make_atom(const char *v) { return sexpr_make_atom(v); }
@@ -132,7 +162,8 @@ int ensure_lib_symbol_in_sheet(sexpr_t *root, const char *lib_id)
     }
     sexpr_list_append(ls, copy);
 
-    /* Resolve (extends "Base") aliases (e.g. LM358 → LM2904). */
+    /* Resolve (extends "Base") aliases (e.g. LM358 → LM2904) — recurse
+     * to import the base symbol too if it isn't already in the sheet. */
     for (size_t i = 1; i < copy->num_children; i++) {
         sexpr_t *n = copy->children[i];
         if (!n || n->type != SEXPR_LIST || n->num_children < 2) continue;
@@ -151,6 +182,9 @@ int ensure_lib_symbol_in_sheet(sexpr_t *root, const char *lib_id)
     }
     return 0;
 }
+/* NOTE: ensure_lib_symbol_in_sheet keeps its own extends loop because it
+ * recursively re-invokes ensure_lib_symbol_in_sheet (which find_extends_base
+ * cannot do — it only returns existing nodes, not load them). */
 
 sexpr_t *find_lib_symbol_node(const sexpr_t *root, const char *lib_id)
 {
@@ -386,26 +420,9 @@ int world_pin_pos(sexpr_t *root, const char *ref, const char *pin_num,
 
     /* Aliases like LM358 store their pins on the (extends "LM2904") base. */
     if (!found) {
-        const char *base_name = NULL;
-        for (size_t i = 1; i < lib_def->num_children; i++) {
-            sexpr_t *c = lib_def->children[i];
-            if (!c || c->type != SEXPR_LIST || c->num_children < 2) continue;
-            if (!c->children[0]->value
-                || strcmp(c->children[0]->value, "extends") != 0) continue;
-            base_name = c->children[1]->value;
-            break;
-        }
-        if (base_name) {
-            const char *colon = strchr(lib_id, ':');
-            if (colon) {
-                char base_lib_id[256];
-                snprintf(base_lib_id, sizeof(base_lib_id), "%.*s:%s",
-                         (int)(colon - lib_id), lib_id, base_name);
-                sexpr_t *base = find_lib_symbol_node(root, base_lib_id);
-                if (base && find_lib_pin_recursive(base, pin_num, &lx, &ly, &langle) == 0)
-                    found = 1;
-            }
-        }
+        sexpr_t *base = find_extends_base(lib_def, root, lib_id);
+        if (base && find_lib_pin_recursive(base, pin_num, &lx, &ly, &langle) == 0)
+            found = 1;
     }
 
     if (!found) {
@@ -427,6 +444,49 @@ int world_pin_pos(sexpr_t *root, const char *ref, const char *pin_num,
     while (out >= 360) out -= 360.0;
     *wangle = out;
     return 0;
+}
+
+/* Walk lib_def for a pin with matching number; return its electrical-type
+ * atom (children[1] of the pin node). Static buffer — caller must copy
+ * if storing across calls. */
+static const char *find_lib_pin_type(const sexpr_t *node, const char *num)
+{
+    if (!node || node->type != SEXPR_LIST || node->num_children == 0) return NULL;
+    const char *tag = node->children[0]->value;
+    if (!tag) return NULL;
+
+    if (strcmp(tag, "pin") == 0) {
+        const char *etype = (node->num_children >= 2 && node->children[1])
+                            ? node->children[1]->value : NULL;
+        for (size_t i = 1; i < node->num_children; i++) {
+            const sexpr_t *c = node->children[i];
+            if (!c || c->type != SEXPR_LIST || c->num_children < 2) continue;
+            if (!c->children[0]->value || strcmp(c->children[0]->value, "number") != 0) continue;
+            if (c->children[1]->value && strcmp(c->children[1]->value, num) == 0)
+                return etype;
+        }
+        return NULL;
+    }
+    for (size_t i = 1; i < node->num_children; i++) {
+        const char *r = find_lib_pin_type(node->children[i], num);
+        if (r) return r;
+    }
+    return NULL;
+}
+
+const char *placed_pin_type(sexpr_t *root, const char *ref, const char *pin_num)
+{
+    sexpr_t *sym = find_placed_by_ref(root, ref);
+    if (!sym) return NULL;
+    const char *lib_id = placed_lib_id(sym);
+    if (!lib_id) return NULL;
+    sexpr_t *lib_def = find_lib_symbol_node(root, lib_id);
+    if (!lib_def) return NULL;
+    const char *t = find_lib_pin_type(lib_def, pin_num);
+    if (t) return t;
+    /* Try extends-base for aliases. */
+    sexpr_t *base = find_extends_base(lib_def, root, lib_id);
+    return base ? find_lib_pin_type(base, pin_num) : NULL;
 }
 
 /* ── Power-rail detection ──────────────────────────────────────────────── */
@@ -493,6 +553,27 @@ sexpr_t *mk_effects_default(void)
     return effects;
 }
 
+/* Label-style effects: same default font + KiCad's standard label justify
+ * convention so the text "tail" sits at the wire and the body extends
+ * outward, not overlapping the connecting symbol.
+ *
+ *   angle  0 / 90  → (justify left  bottom)   anchor on tail end
+ *   angle 180 / 270→ (justify right bottom)
+ *
+ * Verified against KiCad's "Add Label" output for both horizontal pins. */
+static sexpr_t *mk_effects_label(double angle)
+{
+    sexpr_t *eff = mk_effects_default();
+    double a = fmod(angle + 720.0, 360.0);
+    const char *h = (a < 180.0 - 0.001) ? "left" : "right";
+    sexpr_t *just = sexpr_make_list();
+    sexpr_list_append(just, make_atom("justify"));
+    sexpr_list_append(just, make_atom(h));
+    sexpr_list_append(just, make_atom("bottom"));
+    sexpr_list_append(eff, just);
+    return eff;
+}
+
 sexpr_t *mk_uuid_node(void)
 {
     char u[40];
@@ -511,14 +592,17 @@ sexpr_t *mk_property(const char *key, const char *value,
     sexpr_list_append(prop, make_str(key));
     sexpr_list_append(prop, make_str(value ? value : ""));
     sexpr_list_append(prop, mk_at(x, y, angle));
-    sexpr_t *effects = mk_effects_default();
+    /* KiCad's GUI emits these on every placed-symbol property; without
+     * (show_name no) KiCad renders "Reference: R1" instead of just "R1". */
     if (hide) {
         sexpr_t *h = sexpr_make_list();
         sexpr_list_append(h, make_atom("hide"));
         sexpr_list_append(h, make_atom("yes"));
-        sexpr_list_append(effects, h);
+        sexpr_list_append(prop, h);
     }
-    sexpr_list_append(prop, effects);
+    sexpr_list_append(prop, mk_named_atom("show_name", "no"));
+    sexpr_list_append(prop, mk_named_atom("do_not_autoplace", "no"));
+    sexpr_list_append(prop, mk_effects_default());
     return prop;
 }
 
@@ -534,19 +618,19 @@ const char *lib_default_property(const sexpr_t *lib_def, const sexpr_t *root,
             return c->children[2]->value;
     }
     /* Try extends base — common for aliases (LM358 → LM2904). */
-    for (size_t i = 1; i < lib_def->num_children; i++) {
-        sexpr_t *c = lib_def->children[i];
-        if (!c || c->type != SEXPR_LIST || c->num_children < 2) continue;
-        if (!c->children[0]->value || strcmp(c->children[0]->value, "extends") != 0) continue;
-        const char *base = c->children[1]->value;
-        if (!base) break;
+    sexpr_t *base = find_extends_base(lib_def, root, lib_id);
+    if (base) {
+        /* Recurse with base's lib_id; needed for chained extends. */
         const char *colon = strchr(lib_id, ':');
-        if (!colon) break;
         char base_id[256];
-        snprintf(base_id, sizeof(base_id), "%.*s:%s", (int)(colon - lib_id), lib_id, base);
-        sexpr_t *base_def = find_lib_symbol_node(root, base_id);
-        if (base_def) return lib_default_property(base_def, root, base_id, key);
-        break;
+        for (size_t i = 1; colon && i < lib_def->num_children; i++) {
+            const sexpr_t *c = lib_def->children[i];
+            if (!c || c->type != SEXPR_LIST || c->num_children < 2) continue;
+            if (!c->children[0]->value || strcmp(c->children[0]->value, "extends") != 0) continue;
+            snprintf(base_id, sizeof(base_id), "%.*s:%s",
+                     (int)(colon - lib_id), lib_id, c->children[1]->value);
+            return lib_default_property(base, root, base_id, key);
+        }
     }
     return NULL;
 }
@@ -561,23 +645,28 @@ sexpr_t *mk_placed_symbol(const char *lib_id, const char *ref, const char *value
     sexpr_list_append(sym, mk_named_str("lib_id", lib_id));
     sexpr_list_append(sym, mk_at(x, y, angle));
     sexpr_list_append(sym, mk_named_atom("unit", "1"));
+    sexpr_list_append(sym, mk_named_atom("body_style", "1"));
     sexpr_list_append(sym, mk_named_atom("exclude_from_sim", "no"));
     sexpr_list_append(sym, mk_named_atom("in_bom",   "yes"));
     sexpr_list_append(sym, mk_named_atom("on_board", "yes"));
     sexpr_list_append(sym, mk_named_atom("dnp",      "no"));
+    sexpr_list_append(sym, mk_named_atom("in_pos_files", "yes"));
+    sexpr_list_append(sym, mk_named_atom("fields_autoplaced", "yes"));
     sexpr_list_append(sym, mk_uuid_node());
 
-    /* Inherit defaults from the library symbol. `--footprint` overrides
-     * by patching the property after the builder returns. */
+    /* Inherit defaults + property positions from the library symbol so
+     * Reference / Value / Footprint text lands where KiCad would draw it
+     * natively (no hardcoded offsets). `--footprint` overrides the value
+     * by patching after the builder returns. */
     const char *def_fp   = lib_default_property(lib_def, root, lib_id, "Footprint");
     const char *def_ds   = lib_default_property(lib_def, root, lib_id, "Datasheet");
     const char *def_desc = lib_default_property(lib_def, root, lib_id, "Description");
 
-    sexpr_list_append(sym, mk_property("Reference", ref,   x + 2.54, y - 2.54, 0, 0));
-    sexpr_list_append(sym, mk_property("Value",     value, x + 2.54, y + 2.54, 0, 0));
-    sexpr_list_append(sym, mk_property("Footprint", def_fp ? def_fp : "",  x, y, 0, 1));
-    sexpr_list_append(sym, mk_property("Datasheet", def_ds ? def_ds : "~", x, y, 0, 1));
-    sexpr_list_append(sym, mk_property("Description", def_desc ? def_desc : "", x, y, 0, 1));
+    add_inherited_property(sym, lib_def, "Reference", ref,   x, y, angle);
+    add_inherited_property(sym, lib_def, "Value",     value, x, y, angle);
+    add_inherited_property(sym, lib_def, "Footprint", def_fp ? def_fp : "",  x, y, angle);
+    add_inherited_property(sym, lib_def, "Datasheet", def_ds ? def_ds : "",  x, y, angle);
+    add_inherited_property(sym, lib_def, "Description", def_desc ? def_desc : "", x, y, angle);
 
     /* (pin "N" (uuid "...")) per pin in the lib def. */
     for (size_t i = 1; lib_def && i < lib_def->num_children; i++) {
@@ -636,7 +725,7 @@ sexpr_t *mk_label(const char *text, double x, double y, double angle)
     sexpr_list_append(lbl, make_atom("label"));
     sexpr_list_append(lbl, make_str(text));
     sexpr_list_append(lbl, mk_at(x, y, angle));
-    sexpr_list_append(lbl, mk_effects_default());
+    sexpr_list_append(lbl, mk_effects_label(angle));
     sexpr_list_append(lbl, mk_uuid_node());
     return lbl;
 }
@@ -647,10 +736,28 @@ sexpr_t *mk_global_label(const char *text, const char *shape,
     sexpr_t *lbl = sexpr_make_list();
     sexpr_list_append(lbl, make_atom("global_label"));
     sexpr_list_append(lbl, make_str(text));
-    sexpr_list_append(lbl, mk_named_atom("shape", shape ? shape : "passive"));
+    sexpr_list_append(lbl, mk_named_atom("shape", shape ? shape : "input"));
     sexpr_list_append(lbl, mk_at(x, y, angle));
-    sexpr_list_append(lbl, mk_effects_default());
+    /* Global labels have their own arrow-shaped frame; text centers
+     * inside the frame. KiCad's GUI default uses (justify left)
+     * (left = horizontal anchor, no vertical) — text is vertically
+     * centered automatically. */
+    /* Global label justify: angle 0/90 → left (text extends right of anchor),
+     * angle 180/270 → right (text extends left). Without this, KiCad renders
+     * the label rotated 180° (upside-down) on left-side pins. */
+    sexpr_t *eff = mk_effects_default();
+    double a = fmod(angle + 720.0, 360.0);
+    const char *h = (a < 180.0 - 0.001) ? "left" : "right";
+    sexpr_t *just = sexpr_make_list();
+    sexpr_list_append(just, make_atom("justify"));
+    sexpr_list_append(just, make_atom(h));
+    sexpr_list_append(eff, just);
+    sexpr_list_append(lbl, eff);
     sexpr_list_append(lbl, mk_uuid_node());
+    /* KiCad always emits an Intersheetrefs property on global_label so
+     * cross-sheet reference annotations can be rendered. */
+    sexpr_list_append(lbl, mk_property("Intersheetrefs", "${INTERSHEET_REFS}",
+                                       x, y, angle, 1));
     return lbl;
 }
 
@@ -662,7 +769,7 @@ sexpr_t *mk_hier_label(const char *text, const char *shape,
     sexpr_list_append(lbl, make_str(text));
     sexpr_list_append(lbl, mk_named_atom("shape", shape ? shape : "passive"));
     sexpr_list_append(lbl, mk_at(x, y, angle));
-    sexpr_list_append(lbl, mk_effects_default());
+    sexpr_list_append(lbl, mk_effects_label(angle));
     sexpr_list_append(lbl, mk_uuid_node());
     return lbl;
 }
@@ -731,35 +838,32 @@ static double first_lib_pin_angle(const sexpr_t *lib_def)
     return -1;
 }
 
-/* Place-angle that makes the power port's pin point INTO the connecting
- * pin (i.e., opposite of the connecting pin's outward direction).
+/* Place-angle so the power-port body extends AWAY from the connecting
+ * symbol (i.e., in the connecting pin's OUTWARD direction).
  *
- * Lib pins use math-angle (0=right, 90=up). KiCad screen has +y down,
- * so on-screen pin direction = (360 - lib_pin_angle) mod 360. After
- * rotating the placement by α (CCW positive in schematic space — same
- * as the math convention modulo y-flip), pin direction on screen
- * becomes (L + α) mod 360 where L is the lib's screen-space pin dir.
+ * Both lib pin angles and (at) rotation use the same convention. The
+ * power port's body extends in its lib pin's direction (since the body
+ * is reached by following the pin from its open end into the symbol).
+ * After rotating the placement by α (KiCad CW positive), the body's
+ * direction on screen becomes (lib_pin_angle - α) mod 360.
  *
- * We want pin direction = (connecting_pin_outward + 180) mod 360 so
- * the body grows AWAY from the wire. Solve for α:
+ * We want body direction = OUTWARD = (wa + 180) mod 360 where wa is the
+ * connecting pin's INTO direction (what world_pin_pos returns).
+ * Solve:  α = (lib_pin_angle - outward + 360) mod 360
+ *           = (lib_pin_angle - wa + 180 + 720) mod 360
  *
- *   α = (connecting_pin_outward + 180 - L) mod 360
+ * Worked examples (matches what KiCad's "Choose Symbol" produces when
+ * you snap +3.3V to the top of a vertical resistor and GND to the
+ * bottom — both end up at α=0, the lib default):
  *
- * Worked example for GND (lib pin 270 → L=90):
- *   pin facing down (wa=270)  → α=  0   triangle hangs below pin       ✓
- *   pin facing up   (wa= 90)  → α=180   triangle sits above pin        ✓
- *   pin facing right(wa=  0)  → α= 90   triangle to the right of pin   ✓
- *   pin facing left (wa=180)  → α=270   triangle to the left of pin    ✓
- * For +5V/+3V3 (lib pin 90 → L=270):
- *   pin facing up   (wa= 90)  → α=  0   arrow above pin                ✓
- *   pin facing down (wa=270)  → α=180   arrow below pin                ✓
+ *   R pin 1 (top, wa=270) + +3.3V (lib=90):  α = 90-270+180 = 0   ✓
+ *   R pin 2 (bot, wa= 90) + GND   (lib=270): α = 270-90+180 = 360 ✓
+ *   pin facing right (wa=180)    + GND     : α = 270-180+180 = 270 ✓
  */
-static double aligned_power_port_angle(double lib_pin_angle, double pin_outward)
+static double aligned_power_port_angle(double lib_pin_angle, double pin_into_angle)
 {
     if (lib_pin_angle < 0) return 0;  /* unknown lib geometry — accept default */
-    double L = fmod(360.0 - lib_pin_angle, 360.0);
-    double a = fmod(pin_outward + 180.0 - L + 720.0, 360.0);
-    return a;
+    return fmod(lib_pin_angle - pin_into_angle + 180.0 + 720.0, 360.0);
 }
 
 /* (wire (pts (xy x1 y1) (xy x2 y2)) (stroke (width 0) (type default)) (uuid …)) */
@@ -807,7 +911,84 @@ void offset_outward(double pin_into_angle, double step, double *dx, double *dy)
     *dy = -step * sin(rad);  /* y-down on screen → positive sin = up = -dy */
 }
 
-/* See header for contract. */
+/* Look up a property's lib coords in a lib_def. Returns 1 if found. */
+static int lib_property_coords(const sexpr_t *lib_def, const char *key,
+                               double *lx, double *ly, double *la, int *hide)
+{
+    if (!lib_def) return 0;
+    for (size_t i = 1; i < lib_def->num_children; i++) {
+        const sexpr_t *p = lib_def->children[i];
+        if (!p || p->type != SEXPR_LIST || p->num_children < 4) continue;
+        if (!p->children[0]->value || strcmp(p->children[0]->value, "property") != 0) continue;
+        if (!p->children[1]->value || strcmp(p->children[1]->value, key) != 0) continue;
+        const sexpr_t *at = p->children[3];
+        if (!at || at->type != SEXPR_LIST || at->num_children < 4) return 0;
+        if (lx) *lx = atof(at->children[1]->value ? at->children[1]->value : "0");
+        if (ly) *ly = atof(at->children[2]->value ? at->children[2]->value : "0");
+        if (la) *la = atof(at->children[3]->value ? at->children[3]->value : "0");
+        /* hide can live as a top-level (hide yes) sibling of (at) (lib
+         * convention), OR inside (effects … (hide yes) …) (placed
+         * convention). Check both. */
+        if (hide) {
+            *hide = 0;
+            for (size_t k = 4; k < p->num_children; k++) {
+                const sexpr_t *c = p->children[k];
+                if (!c || c->type != SEXPR_LIST || c->num_children < 2) continue;
+                if (c->children[0]->value && strcmp(c->children[0]->value, "hide") == 0
+                    && c->children[1]->value && strcmp(c->children[1]->value, "yes") == 0) {
+                    *hide = 1;
+                    continue;
+                }
+                if (c->children[0]->value && strcmp(c->children[0]->value, "effects") == 0) {
+                    for (size_t m = 1; m < c->num_children; m++) {
+                        const sexpr_t *h = c->children[m];
+                        if (!h || h->type != SEXPR_LIST || h->num_children < 2) continue;
+                        if (h->children[0]->value && strcmp(h->children[0]->value, "hide") == 0
+                            && h->children[1]->value && strcmp(h->children[1]->value, "yes") == 0)
+                            *hide = 1;
+                    }
+                }
+            }
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* Add a property at lib_def's stored coordinate, transformed by the
+ * placement (sym_x, sym_y, sym_a). Falls back to (sym_x, sym_y) if the
+ * lib doesn't have the property. */
+static void add_inherited_property(sexpr_t *sym, const sexpr_t *lib_def,
+                                   const char *key, const char *value,
+                                   double sym_x, double sym_y, double sym_a)
+{
+    double lx = 0, ly = 0, la = 0; int hide = 0;
+    int found = lib_property_coords(lib_def, key, &lx, &ly, &la, &hide);
+    if (!found) { lx = ly = 0; la = 0; hide = (strcmp(key,"Reference")==0); }
+    /* Same transform as world_pin_pos so property text follows the same
+     * rotation as the pins. KiCad y is +down on screen; lib +y is up. */
+    double rad = sym_a * (3.14159265358979323846 / 180.0);
+    double ca = cos(rad), sa = sin(rad);
+    double wx = sym_x + lx * ca - ly * sa;
+    double wy = sym_y - lx * sa - ly * ca;
+    /* KiCad's text-angle rule (verified against GUI-corrected examples):
+     *   VISIBLE properties (hide=no, e.g. Reference, Value) → keep lib
+     *     angle as-is. Symbol rotation moves the position but NOT the
+     *     text orientation (text stays in lib frame for readability).
+     *   HIDDEN properties (hide=yes, e.g. Footprint, Datasheet) → rotate
+     *     with the symbol: text_angle = (lib_angle + sym_a) mod 360. */
+    double text_angle = hide
+        ? fmod(la + sym_a + 720.0, 360.0)
+        : la;
+    sexpr_list_append(sym, mk_property(key, value ? value : "",
+                                       wx, wy, text_angle, hide));
+}
+
+/* See header for contract — placed AT the connecting pin coord (matches
+ * KiCad's "Choose Symbol" snap behavior; power-port pin length is 0 so
+ * the (at) coord IS the connection point). Properties (Reference, Value,
+ * Footprint, Datasheet) inherit their positions from the lib_def, so the
+ * "+3.3V" / "GND" text lands where KiCad would draw it natively. */
 sexpr_t *mk_power_port(const sexpr_t *root, const char *rail,
                        double x, double y, double pin_into_angle,
                        const char *root_uuid, const char *project_name,
@@ -816,36 +997,33 @@ sexpr_t *mk_power_port(const sexpr_t *root, const char *rail,
     char lib_id[96];
     snprintf(lib_id, sizeof(lib_id), "power:%s", rail);
 
-    double dx, dy;
-    offset_outward(pin_into_angle, 2.54, &dx, &dy);
-    double px = snap_grid(x + dx, 1.27);
-    double py = snap_grid(y + dy, 1.27);
-    if (out_x) *out_x = px;
-    if (out_y) *out_y = py;
+    if (out_x) *out_x = x;
+    if (out_y) *out_y = y;
 
-    double lib_pin_angle = first_lib_pin_angle(find_lib_symbol_node(root, lib_id));
+    const sexpr_t *lib_def = find_lib_symbol_node(root, lib_id);
+    double lib_pin_angle = first_lib_pin_angle(lib_def);
     double angle = aligned_power_port_angle(lib_pin_angle, pin_into_angle);
-    /* Re-anchor the placement at the offset coord. The rest of the
-     * function builds the (symbol …) node at this offset position. */
-    x = px; y = py;
 
     sexpr_t *sym = sexpr_make_list();
     sexpr_list_append(sym, make_atom("symbol"));
     sexpr_list_append(sym, mk_named_str("lib_id", lib_id));
     sexpr_list_append(sym, mk_at(x, y, angle));
     sexpr_list_append(sym, mk_named_atom("unit", "1"));
+    sexpr_list_append(sym, mk_named_atom("body_style", "1"));
     sexpr_list_append(sym, mk_named_atom("exclude_from_sim", "no"));
     sexpr_list_append(sym, mk_named_atom("in_bom",   "no"));
     sexpr_list_append(sym, mk_named_atom("on_board", "yes"));
     sexpr_list_append(sym, mk_named_atom("dnp",      "no"));
+    sexpr_list_append(sym, mk_named_atom("in_pos_files", "yes"));
+    sexpr_list_append(sym, mk_named_atom("fields_autoplaced", "yes"));
     sexpr_list_append(sym, mk_uuid_node());
 
     char ref[32];
     snprintf(ref, sizeof(ref), "#PWR%04d", ++g_pwr_counter);
-    sexpr_list_append(sym, mk_property("Reference", ref,  x, y - 3.81, 0, 1));
-    sexpr_list_append(sym, mk_property("Value",     rail, x, y - 1.27, 0, 0));
-    sexpr_list_append(sym, mk_property("Footprint", "",   x, y,        0, 1));
-    sexpr_list_append(sym, mk_property("Datasheet", "~",  x, y,        0, 1));
+    add_inherited_property(sym, lib_def, "Reference", ref,  x, y, angle);
+    add_inherited_property(sym, lib_def, "Value",     rail, x, y, angle);
+    add_inherited_property(sym, lib_def, "Footprint", "",   x, y, angle);
+    add_inherited_property(sym, lib_def, "Datasheet", "",   x, y, angle);
 
     sexpr_t *pin = sexpr_make_list();
     sexpr_list_append(pin, make_atom("pin"));

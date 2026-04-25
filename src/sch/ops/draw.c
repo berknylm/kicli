@@ -165,6 +165,26 @@ int cmd_sch_place(const char *sch_path, int argc, char **argv)
     return 0;
 }
 
+/* Map a pin's electrical type to the matching label shape KiCad would
+ * assign by default. Power pins map to input/output (the arrow direction
+ * matters, the "power_" prefix doesn't exist on labels). Open-collector
+ * variants fall back to "output" since labels have no specialised glyph. */
+static const char *derive_label_shape(const char *pin_type)
+{
+    if (!pin_type)                               return "passive";
+    if (strcmp(pin_type, "input") == 0)          return "input";
+    if (strcmp(pin_type, "output") == 0)         return "output";
+    if (strcmp(pin_type, "bidirectional") == 0)  return "bidirectional";
+    if (strcmp(pin_type, "tri_state") == 0)      return "tri_state";
+    if (strcmp(pin_type, "passive") == 0)        return "passive";
+    if (strcmp(pin_type, "power_in") == 0)       return "input";
+    if (strcmp(pin_type, "power_out") == 0)      return "output";
+    if (strcmp(pin_type, "open_collector") == 0) return "output";
+    if (strcmp(pin_type, "open_emitter") == 0)   return "output";
+    if (strcmp(pin_type, "no_connect") == 0)     return "passive";
+    return "passive";
+}
+
 /* ── cmd_sch_net ────────────────────────────────────────────────────────── */
 
 int cmd_sch_net(const char *sch_path, int argc, char **argv)
@@ -173,10 +193,18 @@ int cmd_sch_net(const char *sch_path, int argc, char **argv)
         fprintf(stderr,
           "Usage: kicli sch <file> net <net-name> <ref>:<pin> [<ref>:<pin> ...]\n"
           "                   [--as local|global|hier|power]\n"
+          "                   [--shape input|output|bidirectional|tri_state|passive]\n"
           "\n"
           "Attaches a label (or power port for known rails, or hierarchical\n"
           "label with --as hier) at each pin's world position. Label rotation\n"
           "matches the pin's outward angle so text reads away from the symbol.\n"
+          "\n"
+          "For --as hier|global the shape (arrow style) is auto-derived from\n"
+          "the connecting pin's electrical type:\n"
+          "  input/power_in  → input    output/power_out → output\n"
+          "  bidirectional   → bidir.   tri_state        → tri_state\n"
+          "  passive/other   → passive\n"
+          "Pass --shape to override.\n"
           "\n"
           "Power rail heuristic (override with --as):\n"
           "  GND, VCC, VDD, VSS, VEE, GNDA, AGND, PGND, +BATT, -BATT, EARTH\n"
@@ -186,11 +214,14 @@ int cmd_sch_net(const char *sch_path, int argc, char **argv)
 
     const char *net  = argv[0];
     const char *force_as = NULL;
+    const char *force_shape = NULL;
     int pin_arg_start = 1;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--as") == 0 && i + 1 < argc)
             force_as = argv[++i];
+        else if (strcmp(argv[i], "--shape") == 0 && i + 1 < argc)
+            force_shape = argv[++i];
     }
 
     char canon[96];
@@ -229,6 +260,7 @@ int cmd_sch_net(const char *sch_path, int argc, char **argv)
     for (int i = pin_arg_start; i < argc; i++) {
         if (argv[i][0] == '-') {
             if (strcmp(argv[i], "--as") == 0 && i + 1 < argc) i++;
+            else if (strcmp(argv[i], "--shape") == 0 && i + 1 < argc) i++;
             continue;
         }
         char refpin[128];
@@ -266,29 +298,26 @@ int cmd_sch_net(const char *sch_path, int argc, char **argv)
 
         sexpr_t *primitive;
         if (from_sheet) {
-            /* Sheet pin already shows its own name text. Place the
-             * splicing label 2.54 mm OUTWARD with a wire stub, same as
-             * the power-port pattern, so we don't draw "VIN VIN" stacked
-             * on top of itself. */
-            double dx, dy;
-            offset_outward(wa, 2.54, &dx, &dy);
-            double lx = snap_grid(wx + dx, 1.27);
-            double ly = snap_grid(wy + dy, 1.27);
-            sexpr_list_append(root, mk_wire(wx, wy, lx, ly));
-            primitive = mk_label(net, lx, ly, label_angle);
+            /* Sheet pin already shows its own name text. Drop a label at
+             * the pin coord so KiCad nets it; visual duplicate is the
+             * cost of label-first design. */
+            primitive = mk_label(net, wx, wy, label_angle);
         } else if (is_power) {
-            /* CCM7 pattern: place power port at a 2.54 mm offset in the
-             * outward direction + a wire stub between. Avoids overlap
-             * with the connecting symbol's body / pin numbers. */
+            /* KiCad's "Choose Symbol" pattern: drop the power port AT
+             * the pin coord (no offset, no wire). Power-port pin length
+             * is 0 so the (at) coord IS the connection. */
             double pp_x, pp_y;
             primitive = mk_power_port(root, canon, wx, wy, wa,
                                       root_uuid, proj, &pp_x, &pp_y);
-            sexpr_list_append(root, mk_wire(wx, wy, pp_x, pp_y));
         } else if (force_as && (strcmp(force_as, "hier") == 0 ||
                                 strcmp(force_as, "hierarchical") == 0)) {
-            primitive = mk_hier_label(net, "passive", wx, wy, label_angle);
+            const char *shape = force_shape ? force_shape
+                              : derive_label_shape(placed_pin_type(root, ref, pin));
+            primitive = mk_hier_label(net, shape, wx, wy, label_angle);
         } else if (force_as && strcmp(force_as, "global") == 0) {
-            primitive = mk_global_label(net, "passive", wx, wy, label_angle);
+            const char *shape = force_shape ? force_shape
+                              : derive_label_shape(placed_pin_type(root, ref, pin));
+            primitive = mk_global_label(net, shape, wx, wy, label_angle);
         } else {
             primitive = mk_label(net, wx, wy, label_angle);
         }
@@ -402,7 +431,7 @@ static int write_blank_child(const char *path, const char *title)
     if (!f) return -1;
     fprintf(f,
         "(kicad_sch\n"
-        "\t(version 20241010)\n"
+        "\t(version 20260306)\n"
         "\t(generator \"kicli\")\n"
         "\t(generator_version \"0.1\")\n"
         "\t(uuid \"%s\")\n"

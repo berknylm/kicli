@@ -4,6 +4,30 @@ All notable changes to **kicli** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.4] — 2026-04-25
+
+### Fixed
+- **Property positions inherited from lib_def**, not hardcoded. The
+  Reference / Value / Footprint / Datasheet text now lands exactly
+  where KiCad would draw it natively (e.g. `+3.3V` Value at the lib's
+  (0, 3.556) offset, GND Reference at (0, -3.81)). Hide flag honored
+  in both lib (`(hide yes)` sibling of `(at)`) and placed conventions
+  (`(hide yes)` inside `(effects)`).
+- **Power-port placement formula corrected**: was rotating into wrong
+  quadrant when the connecting pin's outward direction matched the
+  rail's natural direction (gave α=180 when it should have been 0).
+  New formula: `α = (lib_pin_angle − pin_into + 180) mod 360`. Verified
+  against KiCad "Choose Symbol" snap output for both vertical and
+  horizontal resistors.
+- **No offset / no wire stub on power ports** — placed AT the pin coord
+  matching the "Choose Symbol" drag-and-drop pattern. Power-port pin
+  length is 0 so the (at) coord IS the connection.
+
+### Changed
+- KiCad schematic version bumped from `20241010` → `20260306` to match
+  KiCad 10.0's current write format (eliminates the "this file was
+  created by an older version" warning on open).
+
 ## [0.11.3] — 2026-04-25
 
 ### Changed
