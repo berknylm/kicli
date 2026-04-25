@@ -46,7 +46,12 @@ sexpr_t *mk_placed_symbol(const char *lib_id, const char *ref,
                           const sexpr_t *lib_def, const sexpr_t *root,
                           const char *root_uuid, const char *project_name);
 
-sexpr_t *mk_power_port(const char *rail, double x, double y, double angle,
+/* mk_power_port now takes the connecting pin's outward angle and the
+ * schematic root; it derives the placement angle internally so the port
+ * body always lands AWAY from the wire (GND triangle below a downward
+ * pin, +5V arrow above an upward pin, etc.). */
+sexpr_t *mk_power_port(const sexpr_t *root, const char *rail,
+                       double x, double y, double pin_outward_angle,
                        const char *root_uuid, const char *project_name);
 
 void seed_pwr_counter(const sexpr_t *root);

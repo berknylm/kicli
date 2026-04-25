@@ -4,6 +4,20 @@ All notable changes to **kicli** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.2] — 2026-04-25
+
+### Changed
+- **Power-port orientation**: `mk_power_port` now reads the power lib's
+  natural pin angle and rotates the placement so the symbol body always
+  lands AWAY from the connecting wire. GND triangle hangs below a
+  downward-facing pin, +5V/+3V3 arrow points up from an upward-facing
+  pin, side-facing pins get 90°/270° placements — matches the visual
+  convention real KiCad designs use (CCM7 reference).
+- **Wider auto-grid**: `auto_slot` switched from 10 cols × 25 mm to 6
+  cols × 38.1 mm spacing (and 30.48 mm row height). Both dimensions are
+  1.27 mm grid multiples so pins still snap, but labels at adjacent
+  symbols no longer collide.
+
 ## [0.11.1] — 2026-04-25
 
 ### Added

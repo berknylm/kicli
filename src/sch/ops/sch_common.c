@@ -177,12 +177,15 @@ size_t count_placed_symbols(const sexpr_t *root)
     return n;
 }
 
+/* Auto-place: 6 columns × N rows, 38.1 mm × 30.48 mm cell. Both dims are
+ * 1.27 mm grid multiples (30 × and 24 ×) so placed pins still snap.
+ * Wide enough that one symbol's labels rarely collide with the next. */
 void auto_slot(size_t idx, double *x, double *y)
 {
-    size_t col = idx % 10;
-    size_t row = idx / 10;
-    *x = 50.0 + col * 25.0;
-    *y = 50.0 + row * 20.0;
+    size_t col = idx % 6;
+    size_t row = idx / 6;
+    *x = 50.0 + col * 38.1;
+    *y = 50.0 + row * 30.48;
 }
 
 sexpr_t *find_placed_by_ref(const sexpr_t *root, const char *ref)
@@ -716,11 +719,63 @@ void seed_pwr_counter(const sexpr_t *root)
     if (max > g_pwr_counter) g_pwr_counter = max;
 }
 
-sexpr_t *mk_power_port(const char *rail, double x, double y, double angle,
+/* Walk a power-lib symbol definition and return its only pin's angle
+ * (in lib-coord convention: 0=right, 90=up, 180=left, 270=down).
+ * Returns -1 if the lib_def isn't loaded yet — caller falls back to 0. */
+static double first_lib_pin_angle(const sexpr_t *lib_def)
+{
+    if (!lib_def) return -1;
+    double x, y, a;
+    /* Power symbols all use pin number "1". */
+    if (find_lib_pin_recursive(lib_def, "1", &x, &y, &a) == 0) return a;
+    return -1;
+}
+
+/* Place-angle that makes the power port's pin point INTO the connecting
+ * pin (i.e., opposite of the connecting pin's outward direction).
+ *
+ * Lib pins use math-angle (0=right, 90=up). KiCad screen has +y down,
+ * so on-screen pin direction = (360 - lib_pin_angle) mod 360. After
+ * rotating the placement by α (CCW positive in schematic space — same
+ * as the math convention modulo y-flip), pin direction on screen
+ * becomes (L + α) mod 360 where L is the lib's screen-space pin dir.
+ *
+ * We want pin direction = (connecting_pin_outward + 180) mod 360 so
+ * the body grows AWAY from the wire. Solve for α:
+ *
+ *   α = (connecting_pin_outward + 180 - L) mod 360
+ *
+ * Worked example for GND (lib pin 270 → L=90):
+ *   pin facing down (wa=270)  → α=  0   triangle hangs below pin       ✓
+ *   pin facing up   (wa= 90)  → α=180   triangle sits above pin        ✓
+ *   pin facing right(wa=  0)  → α= 90   triangle to the right of pin   ✓
+ *   pin facing left (wa=180)  → α=270   triangle to the left of pin    ✓
+ * For +5V/+3V3 (lib pin 90 → L=270):
+ *   pin facing up   (wa= 90)  → α=  0   arrow above pin                ✓
+ *   pin facing down (wa=270)  → α=180   arrow below pin                ✓
+ */
+static double aligned_power_port_angle(double lib_pin_angle, double pin_outward)
+{
+    if (lib_pin_angle < 0) return 0;  /* unknown lib geometry — accept default */
+    double L = fmod(360.0 - lib_pin_angle, 360.0);
+    double a = fmod(pin_outward + 180.0 - L + 720.0, 360.0);
+    return a;
+}
+
+/* Public entry: pass `pin_outward_angle` (the angle returned by
+ * world_pin_pos for the pin we're attaching to). The function looks up
+ * the power lib's natural pin direction and rotates the symbol so the
+ * port body lands AWAY from the wire — matches what a human would
+ * draw. `root` is needed so we can read the imported lib symbol. */
+sexpr_t *mk_power_port(const sexpr_t *root, const char *rail,
+                       double x, double y, double pin_outward_angle,
                        const char *root_uuid, const char *project_name)
 {
     char lib_id[96];
     snprintf(lib_id, sizeof(lib_id), "power:%s", rail);
+
+    double lib_pin_angle = first_lib_pin_angle(find_lib_symbol_node(root, lib_id));
+    double angle = aligned_power_port_angle(lib_pin_angle, pin_outward_angle);
 
     sexpr_t *sym = sexpr_make_list();
     sexpr_list_append(sym, make_atom("symbol"));

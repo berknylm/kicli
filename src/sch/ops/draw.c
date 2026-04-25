@@ -264,7 +264,7 @@ int cmd_sch_net(const char *sch_path, int argc, char **argv)
              * global are intentionally bypassed here. */
             primitive = mk_label(net, wx, wy, wa);
         } else if (is_power) {
-            primitive = mk_power_port(canon, wx, wy, wa, root_uuid, proj);
+            primitive = mk_power_port(root, canon, wx, wy, wa, root_uuid, proj);
         } else if (force_as && (strcmp(force_as, "hier") == 0 ||
                                 strcmp(force_as, "hierarchical") == 0)) {
             primitive = mk_hier_label(net, "passive", wx, wy, wa);
