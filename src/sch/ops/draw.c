@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 #include <errno.h>
 
 /* ── cmd_sch_place ──────────────────────────────────────────────────────── */
@@ -255,23 +256,41 @@ int cmd_sch_net(const char *sch_path, int argc, char **argv)
         wx = snap_grid(wx, 1.27);
         wy = snap_grid(wy, 1.27);
 
+        /* Label rotation — for clean readability, text reads OUTWARD from
+         * the symbol. world_pin_pos returns wa = INTO direction, so the
+         * outward label angle is wa+180. KiCad label angle 0 = text reads
+         * left-to-right with anchor on the left of the text — perfect for
+         * a pin extending RIGHT (outward=0). For an upward pin (outward=90)
+         * the label rotates 90° to extend up. */
+        double label_angle = fmod(wa + 180.0 + 720.0, 360.0);
+
         sexpr_t *primitive;
         if (from_sheet) {
-            /* On the parent side of a sheet pin, ALWAYS emit a plain label
-             * with the net name. The sheet pin already carries the name on
-             * its own; matching plain label at the same coord splices the
-             * parent net to the child. Power-port heuristic and --as hier/
-             * global are intentionally bypassed here. */
-            primitive = mk_label(net, wx, wy, wa);
+            /* Sheet pin already shows its own name text. Place the
+             * splicing label 2.54 mm OUTWARD with a wire stub, same as
+             * the power-port pattern, so we don't draw "VIN VIN" stacked
+             * on top of itself. */
+            double dx, dy;
+            offset_outward(wa, 2.54, &dx, &dy);
+            double lx = snap_grid(wx + dx, 1.27);
+            double ly = snap_grid(wy + dy, 1.27);
+            sexpr_list_append(root, mk_wire(wx, wy, lx, ly));
+            primitive = mk_label(net, lx, ly, label_angle);
         } else if (is_power) {
-            primitive = mk_power_port(root, canon, wx, wy, wa, root_uuid, proj);
+            /* CCM7 pattern: place power port at a 2.54 mm offset in the
+             * outward direction + a wire stub between. Avoids overlap
+             * with the connecting symbol's body / pin numbers. */
+            double pp_x, pp_y;
+            primitive = mk_power_port(root, canon, wx, wy, wa,
+                                      root_uuid, proj, &pp_x, &pp_y);
+            sexpr_list_append(root, mk_wire(wx, wy, pp_x, pp_y));
         } else if (force_as && (strcmp(force_as, "hier") == 0 ||
                                 strcmp(force_as, "hierarchical") == 0)) {
-            primitive = mk_hier_label(net, "passive", wx, wy, wa);
+            primitive = mk_hier_label(net, "passive", wx, wy, label_angle);
         } else if (force_as && strcmp(force_as, "global") == 0) {
-            primitive = mk_global_label(net, "passive", wx, wy, wa);
+            primitive = mk_global_label(net, "passive", wx, wy, label_angle);
         } else {
-            primitive = mk_label(net, wx, wy, wa);
+            primitive = mk_label(net, wx, wy, label_angle);
         }
         sexpr_list_append(root, primitive);
         n_pins++;

@@ -46,13 +46,30 @@ sexpr_t *mk_placed_symbol(const char *lib_id, const char *ref,
                           const sexpr_t *lib_def, const sexpr_t *root,
                           const char *root_uuid, const char *project_name);
 
-/* mk_power_port now takes the connecting pin's outward angle and the
- * schematic root; it derives the placement angle internally so the port
- * body always lands AWAY from the wire (GND triangle below a downward
- * pin, +5V arrow above an upward pin, etc.). */
+/* mk_power_port: place a power port at a 2.54 mm offset from the
+ * connecting pin, in the pin's outward direction. The caller is
+ * responsible for also emitting a wire stub between the connecting
+ * pin and the port (use mk_wire below). The placement angle is
+ * derived from the lib's natural pin direction so the body always
+ * lands AWAY from the wire (GND triangle below a downward pin, +5V
+ * arrow above an upward pin, etc.).
+ *
+ * `pin_into_angle` is the connecting pin's INTO-body direction (what
+ * world_pin_pos returns). The function computes outward = into+180
+ * internally and offsets the placement coord accordingly. The chosen
+ * placement coord is written back into *out_x/*out_y so the caller
+ * knows where to draw the wire's far endpoint. */
 sexpr_t *mk_power_port(const sexpr_t *root, const char *rail,
-                       double x, double y, double pin_outward_angle,
-                       const char *root_uuid, const char *project_name);
+                       double x, double y, double pin_into_angle,
+                       const char *root_uuid, const char *project_name,
+                       double *out_x, double *out_y);
+
+/* (wire (pts (xy x1 y1) (xy x2 y2)) (stroke …) (uuid …)) */
+sexpr_t *mk_wire(double x1, double y1, double x2, double y2);
+
+/* Compute offset (dx, dy) of `step` mm in the OUTWARD direction
+ * derived from a pin's into-body angle. */
+void offset_outward(double pin_into_angle, double step, double *dx, double *dy);
 
 void seed_pwr_counter(const sexpr_t *root);
 

@@ -4,6 +4,21 @@ All notable changes to **kicli** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.3] — 2026-04-25
+
+### Changed
+- **CCM7-style placement for power ports and sheet-pin labels**:
+  matching how a human draws KiCad schematics, kicli now offsets
+  power ports and sheet-pin labels by 2.54 mm in the OUTWARD direction
+  of the connecting pin and emits a wire stub between them. Eliminates
+  text overlap with component bodies / pin numbers / sheet pin names.
+- **Outward-reading label rotation**: plain / hierarchical / global
+  labels now rotate so their text reads AWAY from the connecting
+  symbol (was reading INTO the symbol body). KiCad label angle =
+  pin's outward direction.
+- New helpers in `sch_ops.h`: `mk_wire(x1,y1,x2,y2)` and
+  `offset_outward(into_angle, step, dx, dy)`.
+
 ## [0.11.2] — 2026-04-25
 
 ### Changed

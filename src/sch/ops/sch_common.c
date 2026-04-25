@@ -762,20 +762,72 @@ static double aligned_power_port_angle(double lib_pin_angle, double pin_outward)
     return a;
 }
 
-/* Public entry: pass `pin_outward_angle` (the angle returned by
- * world_pin_pos for the pin we're attaching to). The function looks up
- * the power lib's natural pin direction and rotates the symbol so the
- * port body lands AWAY from the wire — matches what a human would
- * draw. `root` is needed so we can read the imported lib symbol. */
+/* (wire (pts (xy x1 y1) (xy x2 y2)) (stroke (width 0) (type default)) (uuid …)) */
+sexpr_t *mk_wire(double x1, double y1, double x2, double y2)
+{
+    sexpr_t *wire = sexpr_make_list();
+    sexpr_list_append(wire, make_atom("wire"));
+    sexpr_t *pts = sexpr_make_list();
+    sexpr_list_append(pts, make_atom("pts"));
+    char b[32];
+    sexpr_t *xy1 = sexpr_make_list();
+    sexpr_list_append(xy1, make_atom("xy"));
+    fmt_num(b, sizeof(b), x1); sexpr_list_append(xy1, make_atom(b));
+    fmt_num(b, sizeof(b), y1); sexpr_list_append(xy1, make_atom(b));
+    sexpr_list_append(pts, xy1);
+    sexpr_t *xy2 = sexpr_make_list();
+    sexpr_list_append(xy2, make_atom("xy"));
+    fmt_num(b, sizeof(b), x2); sexpr_list_append(xy2, make_atom(b));
+    fmt_num(b, sizeof(b), y2); sexpr_list_append(xy2, make_atom(b));
+    sexpr_list_append(pts, xy2);
+    sexpr_list_append(wire, pts);
+    sexpr_t *stroke = sexpr_make_list();
+    sexpr_list_append(stroke, make_atom("stroke"));
+    sexpr_t *w = sexpr_make_list();
+    sexpr_list_append(w, make_atom("width"));
+    sexpr_list_append(w, make_atom("0"));
+    sexpr_list_append(stroke, w);
+    sexpr_t *t = sexpr_make_list();
+    sexpr_list_append(t, make_atom("type"));
+    sexpr_list_append(t, make_atom("default"));
+    sexpr_list_append(stroke, t);
+    sexpr_list_append(wire, stroke);
+    sexpr_list_append(wire, mk_uuid_node());
+    return wire;
+}
+
+/* Convert pin's into-body angle to a (dx, dy) outward offset of `step` mm.
+ * Coordinate convention matches world_pin_pos: +x right, +y down on screen,
+ * angle math (0=right, 90=up math = up on screen). */
+void offset_outward(double pin_into_angle, double step, double *dx, double *dy)
+{
+    double outward = fmod(pin_into_angle + 180.0 + 720.0, 360.0);
+    double rad = outward * (3.14159265358979323846 / 180.0);
+    *dx = step * cos(rad);
+    *dy = -step * sin(rad);  /* y-down on screen → positive sin = up = -dy */
+}
+
+/* See header for contract. */
 sexpr_t *mk_power_port(const sexpr_t *root, const char *rail,
-                       double x, double y, double pin_outward_angle,
-                       const char *root_uuid, const char *project_name)
+                       double x, double y, double pin_into_angle,
+                       const char *root_uuid, const char *project_name,
+                       double *out_x, double *out_y)
 {
     char lib_id[96];
     snprintf(lib_id, sizeof(lib_id), "power:%s", rail);
 
+    double dx, dy;
+    offset_outward(pin_into_angle, 2.54, &dx, &dy);
+    double px = snap_grid(x + dx, 1.27);
+    double py = snap_grid(y + dy, 1.27);
+    if (out_x) *out_x = px;
+    if (out_y) *out_y = py;
+
     double lib_pin_angle = first_lib_pin_angle(find_lib_symbol_node(root, lib_id));
-    double angle = aligned_power_port_angle(lib_pin_angle, pin_outward_angle);
+    double angle = aligned_power_port_angle(lib_pin_angle, pin_into_angle);
+    /* Re-anchor the placement at the offset coord. The rest of the
+     * function builds the (symbol …) node at this offset position. */
+    x = px; y = py;
 
     sexpr_t *sym = sexpr_make_list();
     sexpr_list_append(sym, make_atom("symbol"));
